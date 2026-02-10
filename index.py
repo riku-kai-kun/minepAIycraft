@@ -2,6 +2,7 @@ import pygame
 import sys
 import math
 import time
+from functools import lru_cache
 from datetime import datetime
 from pygame.locals import *
 from OpenGL.GL import *
@@ -12,12 +13,27 @@ SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 SKY_COLOR = (0.5, 0.8, 1.0, 1)
 CAPTION = "MinepAIycraft"
-GROUND_SIZE = 20
-VIEW_DISTANCE = 14
+CHUNK_SIZE = 16
+CHUNK_RADIUS = 6
+VIEW_DISTANCE = CHUNK_SIZE * CHUNK_RADIUS
 MAX_REACH = 6
-WORLD_MIN_Y = -4
+STONE_DEPTH = 800
+WORLD_SIZE = 10000
+WORLD_MIN_X = -(WORLD_SIZE // 2)
+WORLD_MAX_X = (WORLD_SIZE // 2) - 1
+WORLD_MIN_Z = -(WORLD_SIZE // 2)
+WORLD_MAX_Z = (WORLD_SIZE // 2) - 1
+WORLD_MIN_Y = -1 - STONE_DEPTH
 WORLD_MAX_Y = 8
 LOG_PATH = "minepAIycraft.log"
+CAVE_SEED = 1337
+CAVE_SCALE = 0.07
+CAVE_THRESHOLD = 0.72
+CAVE_MIN_Y = -200
+CAVE_MAX_Y = -20
+CAVE_RENDER_RANGE = 20
+CAVE_REFRESH_STEP = 8
+MAX_CHUNK_BUILDS_PER_FRAME = 2
 
 # --- ブロックの定義 ---
 VERTICES = ((0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5), (-0.5, -0.5, -0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, -0.5, 0.5), (-0.5, 0.5, 0.5))
@@ -27,23 +43,54 @@ EDGES = (
     (4, 5), (5, 7), (7, 6), (6, 4),
     (0, 4), (1, 5), (2, 7), (3, 6),
 )
-COLORS = {"grass": (0.3, 0.8, 0.2), "dirt": (0.6, 0.4, 0.2)}
-CUBE_LIST = None
-BLOCKS = set()
+COLORS = {"grass": (0.3, 0.8, 0.2), "dirt": (0.6, 0.4, 0.2), "stone": (0.5, 0.5, 0.5)}
+TEXTURE_GRASS_TOP = "images/textures/grass_top.png"
+TEXTURE_DIRT = "images/textures/dirt.png"
+TEXTURE_STONE = "images/textures/stone.png"
+CUBE_LIST_DIRT = None
+TEX_COORDS = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+CUBE_LIST_GRASS_SIDES = None
+CUBE_LIST_GRASS_TOP = None
+CUBE_LIST_STONE = None
+TEX_GRASS_TOP = None
+TEX_DIRT = None
+TEX_STONE = None
+PLACED_BLOCKS = set()
+REMOVED_GROUND = set()
+REMOVED_STONE = set()
+ACTIVE_CHUNKS = {}
+LAST_PLAYER_CHUNK = None
+LAST_PLAYER_Y = None
+CHUNKS_NEED_UPDATE = True
 BLOCKS_PLACED = 0
 BLOCKS_REMOVED = 0
 SESSION_START = time.time()
 
-def draw_cube():
-    glCallList(CUBE_LIST)
+class ChunkMesh:
+    def __init__(self, key):
+        self.key = key
+        self.display_list = None
+        self.dirty = True
+
+def draw_grass_block():
+    glCallList(CUBE_LIST_GRASS_SIDES)
+    glCallList(CUBE_LIST_GRASS_TOP)
+
+def draw_dirt_block():
+    glCallList(CUBE_LIST_DIRT)
+
+def draw_stone_cube():
+    glCallList(CUBE_LIST_STONE)
 
 def draw_cube_edges():
+    glDisable(GL_TEXTURE_2D)
     glColor3f(0.0, 0.0, 0.0)
     glBegin(GL_LINES)
     for edge in EDGES:
         for vertex_index in edge:
             glVertex3fv(VERTICES[vertex_index])
     glEnd()
+    glEnable(GL_TEXTURE_2D)
 
 # --- プレイヤー/カメラ ---
 PLAYER_HEIGHT = 1.8
@@ -75,7 +122,6 @@ player = Player()
 
 def init_gl():
     """ OpenGLの初期化 """
-    build_cube_list()
     glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
@@ -83,25 +129,349 @@ def init_gl():
     glMatrixMode(GL_MODELVIEW)
     glClearColor(*SKY_COLOR)
     glEnable(GL_DEPTH_TEST)
+    glEnable(GL_TEXTURE_2D)
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE)
     glLineWidth(1.0)
+    load_textures()
+    build_cube_list()
+
+def load_texture(path):
+    surface = pygame.image.load(path).convert_alpha()
+    surface = pygame.transform.flip(surface, False, True)
+    width, height = surface.get_size()
+    texture_data = pygame.image.tostring(surface, "RGBA", True)
+    tex_id = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, tex_id)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture_data)
+    return tex_id
+
+def load_textures():
+    global TEX_GRASS_TOP, TEX_DIRT, TEX_STONE
+    TEX_GRASS_TOP = load_texture(TEXTURE_GRASS_TOP)
+    TEX_DIRT = load_texture(TEXTURE_DIRT)
+    TEX_STONE = load_texture(TEXTURE_STONE)
 
 def build_cube_list():
-    global CUBE_LIST
-    CUBE_LIST = glGenLists(1)
-    glNewList(CUBE_LIST, GL_COMPILE)
+    global CUBE_LIST_DIRT, CUBE_LIST_GRASS_SIDES, CUBE_LIST_GRASS_TOP, CUBE_LIST_STONE
+    CUBE_LIST_DIRT = glGenLists(1)
+    glNewList(CUBE_LIST_DIRT, GL_COMPILE)
+    glBindTexture(GL_TEXTURE_2D, TEX_DIRT)
+    glBegin(GL_QUADS)
+    for surface in SURFACES:
+        for i, vertex_index in enumerate(surface):
+            u, v = TEX_COORDS[i]
+            glTexCoord2f(u, v)
+            glVertex3fv(VERTICES[vertex_index])
+    glEnd()
+    glEndList()
+
+    CUBE_LIST_GRASS_SIDES = glGenLists(1)
+    glNewList(CUBE_LIST_GRASS_SIDES, GL_COMPILE)
+    glBindTexture(GL_TEXTURE_2D, TEX_DIRT)
     glBegin(GL_QUADS)
     for i, surface in enumerate(SURFACES):
-        glColor3fv(COLORS["grass"] if i == 4 else COLORS["dirt"])
-        for vertex_index in surface:
+        if i == 4:
+            continue
+        for j, vertex_index in enumerate(surface):
+            u, v = TEX_COORDS[j]
+            glTexCoord2f(u, v)
+            glVertex3fv(VERTICES[vertex_index])
+    glEnd()
+    glEndList()
+
+    CUBE_LIST_GRASS_TOP = glGenLists(1)
+    glNewList(CUBE_LIST_GRASS_TOP, GL_COMPILE)
+    glBindTexture(GL_TEXTURE_2D, TEX_GRASS_TOP)
+    glBegin(GL_QUADS)
+    surface = SURFACES[4]
+    for i, vertex_index in enumerate(surface):
+        u, v = TEX_COORDS[i]
+        glTexCoord2f(u, v)
+        glVertex3fv(VERTICES[vertex_index])
+    glEnd()
+    glEndList()
+
+    CUBE_LIST_STONE = glGenLists(1)
+    glNewList(CUBE_LIST_STONE, GL_COMPILE)
+    glBindTexture(GL_TEXTURE_2D, TEX_STONE)
+    glBegin(GL_QUADS)
+    for surface in SURFACES:
+        for i, vertex_index in enumerate(surface):
+            u, v = TEX_COORDS[i]
+            glTexCoord2f(u, v)
             glVertex3fv(VERTICES[vertex_index])
     glEnd()
     glEndList()
 
 def init_world():
-    BLOCKS.clear()
-    for x in range(-GROUND_SIZE // 2, GROUND_SIZE // 2):
-        for z in range(-GROUND_SIZE // 2, GROUND_SIZE // 2):
-            BLOCKS.add((x, -1, z))
+    global LAST_PLAYER_CHUNK, LAST_PLAYER_Y, CHUNKS_NEED_UPDATE
+    PLACED_BLOCKS.clear()
+    REMOVED_GROUND.clear()
+    REMOVED_STONE.clear()
+    for chunk in ACTIVE_CHUNKS.values():
+        if chunk.display_list:
+            glDeleteLists(chunk.display_list, 1)
+    ACTIVE_CHUNKS.clear()
+    LAST_PLAYER_CHUNK = None
+    LAST_PLAYER_Y = None
+    CHUNKS_NEED_UPDATE = True
+
+def is_in_world(x, y, z):
+    if x < WORLD_MIN_X or x > WORLD_MAX_X:
+        return False
+    if z < WORLD_MIN_Z or z > WORLD_MAX_Z:
+        return False
+    if y < WORLD_MIN_Y or y > WORLD_MAX_Y:
+        return False
+    return True
+
+def is_block_at(x, y, z):
+    if not is_in_world(x, y, z):
+        return False
+    if (x, y, z) in PLACED_BLOCKS:
+        return True
+    if y == -1:
+        return (x, y, z) not in REMOVED_GROUND
+    if y <= -2:
+        if is_cave_air(x, y, z):
+            return False
+        return (x, y, z) not in REMOVED_STONE
+    return (x, y, z) in PLACED_BLOCKS
+
+@lru_cache(maxsize=500000)
+def _hash3(x, y, z, seed):
+    h = x * 374761393 + y * 668265263 + z * 2147483647 + seed * 374761393
+    h = (h ^ (h >> 13)) & 0xFFFFFFFF
+    return h
+
+@lru_cache(maxsize=500000)
+def _hash_float(x, y, z, seed):
+    return _hash3(x, y, z, seed) / 0xFFFFFFFF
+
+def _fade(t):
+    return t * t * (3.0 - 2.0 * t)
+
+def _lerp(a, b, t):
+    return a + (b - a) * t
+
+@lru_cache(maxsize=200000)
+def value_noise_3d(x, y, z, scale, seed):
+    sx = x * scale
+    sy = y * scale
+    sz = z * scale
+    x0 = int(math.floor(sx))
+    y0 = int(math.floor(sy))
+    z0 = int(math.floor(sz))
+    x1 = x0 + 1
+    y1 = y0 + 1
+    z1 = z0 + 1
+    fx = _fade(sx - x0)
+    fy = _fade(sy - y0)
+    fz = _fade(sz - z0)
+
+    v000 = _hash_float(x0, y0, z0, seed)
+    v100 = _hash_float(x1, y0, z0, seed)
+    v010 = _hash_float(x0, y1, z0, seed)
+    v110 = _hash_float(x1, y1, z0, seed)
+    v001 = _hash_float(x0, y0, z1, seed)
+    v101 = _hash_float(x1, y0, z1, seed)
+    v011 = _hash_float(x0, y1, z1, seed)
+    v111 = _hash_float(x1, y1, z1, seed)
+
+    x00 = _lerp(v000, v100, fx)
+    x10 = _lerp(v010, v110, fx)
+    x01 = _lerp(v001, v101, fx)
+    x11 = _lerp(v011, v111, fx)
+    y0v = _lerp(x00, x10, fy)
+    y1v = _lerp(x01, x11, fy)
+    return _lerp(y0v, y1v, fz)
+
+@lru_cache(maxsize=200000)
+def is_cave_air(x, y, z):
+    if y < CAVE_MIN_Y or y > CAVE_MAX_Y:
+        return False
+    n1 = value_noise_3d(x, y, z, CAVE_SCALE, CAVE_SEED)
+    n2 = value_noise_3d(x + 101, y - 37, z + 53, CAVE_SCALE * 1.9, CAVE_SEED + 17)
+    density = (n1 * 0.7 + n2 * 0.3)
+    return density > CAVE_THRESHOLD
+
+def world_to_chunk(x, z):
+    return (int(math.floor(x / CHUNK_SIZE)), int(math.floor(z / CHUNK_SIZE)))
+
+def chunk_bounds(cx, cz):
+    start_x = cx * CHUNK_SIZE
+    start_z = cz * CHUNK_SIZE
+    end_x = start_x + CHUNK_SIZE - 1
+    end_z = start_z + CHUNK_SIZE - 1
+    return start_x, end_x, start_z, end_z
+
+def chunk_limits():
+    min_cx = WORLD_MIN_X // CHUNK_SIZE
+    max_cx = WORLD_MAX_X // CHUNK_SIZE
+    min_cz = WORLD_MIN_Z // CHUNK_SIZE
+    max_cz = WORLD_MAX_Z // CHUNK_SIZE
+    return min_cx, max_cx, min_cz, max_cz
+
+def is_chunk_in_world(cx, cz):
+    min_cx, max_cx, min_cz, max_cz = chunk_limits()
+    return min_cx <= cx <= max_cx and min_cz <= cz <= max_cz
+
+def build_chunk_list(chunk):
+    if chunk.display_list is None:
+        chunk.display_list = glGenLists(1)
+    glNewList(chunk.display_list, GL_COMPILE)
+    cx, cz = chunk.key
+    start_x, end_x, start_z, end_z = chunk_bounds(cx, cz)
+    if end_x < WORLD_MIN_X or start_x > WORLD_MAX_X or end_z < WORLD_MIN_Z or start_z > WORLD_MAX_Z:
+        glEndList()
+        chunk.dirty = False
+        return
+    min_x = max(start_x, WORLD_MIN_X)
+    max_x = min(end_x, WORLD_MAX_X)
+    min_z = max(start_z, WORLD_MIN_Z)
+    max_z = min(end_z, WORLD_MAX_Z)
+    removed_ground = REMOVED_GROUND
+    removed_stone = REMOVED_STONE
+    placed_blocks = PLACED_BLOCKS
+    for x in range(min_x, max_x + 1):
+        for z in range(min_z, max_z + 1):
+            if (x, -1, z) not in removed_ground and (x, -1, z) not in placed_blocks:
+                glPushMatrix()
+                glTranslatef(x, -1, z)
+                draw_grass_block()
+                glPopMatrix()
+
+    for (x, y, z) in placed_blocks:
+        if x < min_x or x > max_x or z < min_z or z > max_z:
+            continue
+        glPushMatrix()
+        glTranslatef(x, y, z)
+        draw_dirt_block()
+        glPopMatrix()
+
+    exposed_stone = set()
+    candidates = set()
+    for (ax, ay, az) in removed_ground:
+        if ax < min_x - 1 or ax > max_x + 1 or az < min_z - 1 or az > max_z + 1:
+            continue
+        candidates.add((ax, ay, az))
+    for (ax, ay, az) in removed_stone:
+        if ax < min_x - 1 or ax > max_x + 1 or az < min_z - 1 or az > max_z + 1:
+            continue
+        candidates.add((ax, ay, az))
+
+    center_y = int(round(player.position[1]))
+    cave_min_y = max(CAVE_MIN_Y, center_y - CAVE_RENDER_RANGE, WORLD_MIN_Y)
+    cave_max_y = min(CAVE_MAX_Y, center_y + CAVE_RENDER_RANGE, -2)
+    if cave_max_y >= cave_min_y:
+        for x in range(min_x - 1, max_x + 2):
+            for z in range(min_z - 1, max_z + 2):
+                for y in range(cave_min_y, cave_max_y + 1):
+                    if is_cave_air(x, y, z):
+                        candidates.add((x, y, z))
+
+    for (ax, ay, az) in candidates:
+        for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, -1, 0), (0, 1, 0)):
+            nx, ny, nz = ax + dx, ay + dy, az + dz
+            if ny > -2:
+                continue
+            if nx < min_x or nx > max_x or nz < min_z or nz > max_z:
+                continue
+            if not is_in_world(nx, ny, nz):
+                continue
+            if not is_block_at(nx, ny, nz):
+                continue
+            if (nx, ny, nz) in removed_stone:
+                continue
+            if (nx, ny, nz) in placed_blocks:
+                continue
+            exposed_stone.add((nx, ny, nz))
+
+    for (x, y, z) in exposed_stone:
+        if y < WORLD_MIN_Y or y > -2:
+            continue
+        if not is_block_at(x, y, z):
+            continue
+        # Confirm at least one face is exposed to air
+        for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, -1, 0), (0, 1, 0)):
+            nx, ny, nz = x + dx, y + dy, z + dz
+            if not is_block_at(nx, ny, nz):
+                glPushMatrix()
+                glTranslatef(x, y, z)
+                draw_stone_cube()
+                glPopMatrix()
+                break
+    glEndList()
+    chunk.dirty = False
+
+def mark_chunk_dirty_at(x, z):
+    global CHUNKS_NEED_UPDATE
+    cx, cz = world_to_chunk(x, z)
+    keys = {(cx, cz)}
+    if x % CHUNK_SIZE == 0:
+        keys.add((cx - 1, cz))
+    if x % CHUNK_SIZE == CHUNK_SIZE - 1:
+        keys.add((cx + 1, cz))
+    if z % CHUNK_SIZE == 0:
+        keys.add((cx, cz - 1))
+    if z % CHUNK_SIZE == CHUNK_SIZE - 1:
+        keys.add((cx, cz + 1))
+    for key in keys:
+        if key in ACTIVE_CHUNKS:
+            ACTIVE_CHUNKS[key].dirty = True
+    CHUNKS_NEED_UPDATE = True
+
+def update_visible_chunks(force=False):
+    global LAST_PLAYER_CHUNK, LAST_PLAYER_Y, CHUNKS_NEED_UPDATE
+    player_chunk = world_to_chunk(player.position[0], player.position[2])
+    if force or player_chunk != LAST_PLAYER_CHUNK:
+        LAST_PLAYER_CHUNK = player_chunk
+        desired = set()
+        for dx in range(-CHUNK_RADIUS, CHUNK_RADIUS + 1):
+            for dz in range(-CHUNK_RADIUS, CHUNK_RADIUS + 1):
+                cx = player_chunk[0] + dx
+                cz = player_chunk[1] + dz
+                if not is_chunk_in_world(cx, cz):
+                    continue
+                desired.add((cx, cz))
+        for key in list(ACTIVE_CHUNKS.keys()):
+            if key not in desired:
+                chunk = ACTIVE_CHUNKS.pop(key)
+                if chunk.display_list:
+                    glDeleteLists(chunk.display_list, 1)
+        for key in desired:
+            if key not in ACTIVE_CHUNKS:
+                ACTIVE_CHUNKS[key] = ChunkMesh(key)
+        CHUNKS_NEED_UPDATE = True
+
+    if LAST_PLAYER_Y is None:
+        LAST_PLAYER_Y = player.position[1]
+    if abs(player.position[1] - LAST_PLAYER_Y) >= CAVE_REFRESH_STEP:
+        LAST_PLAYER_Y = player.position[1]
+        for chunk in ACTIVE_CHUNKS.values():
+            chunk.dirty = True
+        CHUNKS_NEED_UPDATE = True
+
+    if CHUNKS_NEED_UPDATE:
+        builds = 0
+        for chunk in ACTIVE_CHUNKS.values():
+            if not chunk.dirty:
+                continue
+            build_chunk_list(chunk)
+            builds += 1
+            if builds >= MAX_CHUNK_BUILDS_PER_FRAME:
+                break
+        CHUNKS_NEED_UPDATE = any(chunk.dirty for chunk in ACTIVE_CHUNKS.values())
+
+def draw_chunks():
+    update_visible_chunks()
+    for chunk in ACTIVE_CHUNKS.values():
+        if chunk.display_list:
+            glCallList(chunk.display_list)
 
 def log_event(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -168,7 +538,7 @@ def raycast_blocks(origin, direction, max_dist):
     prev = None
     t = 0.0
     while t <= max_dist:
-        if (vx, vy, vz) in BLOCKS:
+        if is_block_at(vx, vy, vz):
             return ((vx, vy, vz), prev)
         if t_max_x < t_max_y:
             if t_max_x < t_max_z:
@@ -193,8 +563,8 @@ def raycast_blocks(origin, direction, max_dist):
                 t = t_max_z
                 t_max_z += t_delta_z
 
-        if (vx < -GROUND_SIZE // 2 or vx >= GROUND_SIZE // 2 or
-            vz < -GROUND_SIZE // 2 or vz >= GROUND_SIZE // 2 or
+        if (vx < WORLD_MIN_X or vx > WORLD_MAX_X or
+            vz < WORLD_MIN_Z or vz > WORLD_MAX_Z or
             vy < WORLD_MIN_Y or vy > WORLD_MAX_Y):
             return (None, None)
     return (None, None)
@@ -230,15 +600,15 @@ def iter_nearby_blocks(aabb):
     min_z = math.floor(aabb[4] - 0.5)
     max_z = math.floor(aabb[5] + 0.5)
     for x in range(min_x, max_x + 1):
-        if x < -GROUND_SIZE // 2 or x >= GROUND_SIZE // 2:
+        if x < WORLD_MIN_X or x > WORLD_MAX_X:
             continue
         for y in range(min_y, max_y + 1):
             if y < WORLD_MIN_Y or y > WORLD_MAX_Y:
                 continue
             for z in range(min_z, max_z + 1):
-                if z < -GROUND_SIZE // 2 or z >= GROUND_SIZE // 2:
+                if z < WORLD_MIN_Z or z > WORLD_MAX_Z:
                     continue
-                if (x, y, z) in BLOCKS:
+                if is_block_at(x, y, z):
                     yield (x, y, z)
 
 def resolve_collisions(dx, dy, dz):
@@ -328,18 +698,8 @@ def handle_input():
     return move_dx, move_dz
 
 def draw_ground():
-    """ 地面を描画する """
-    center_x = player.position[0]
-    center_z = player.position[2]
-    for (x, y, z) in BLOCKS:
-        if abs(x - center_x) > VIEW_DISTANCE:
-            continue
-        if abs(z - center_z) > VIEW_DISTANCE:
-            continue
-        glPushMatrix()
-        glTranslatef(x, y, z)
-        draw_cube()
-        glPopMatrix()
+    """ 互換用: チャンク描画に委譲 """
+    draw_chunks()
 
 def draw_target_block_outline(target):
     if target is None:
@@ -351,6 +711,7 @@ def draw_target_block_outline(target):
     glPopMatrix()
 
 def draw_crosshair():
+    glDisable(GL_TEXTURE_2D)
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
@@ -381,29 +742,25 @@ def draw_crosshair():
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
+    glEnable(GL_TEXTURE_2D)
 
 def is_supported(pos):
-    foot_y = pos[1]
-    support_y = foot_y - 0.001
-    for (x, y, z) in BLOCKS:
-        if abs((y + 0.5) - support_y) > 0.01:
-            continue
-        if abs(pos[0] - x) <= (0.5 - 0.001 + PLAYER_RADIUS):
-            if abs(pos[2] - z) <= (0.5 - 0.001 + PLAYER_RADIUS):
-                return True
+    aabb = get_player_aabb(pos)
+    foot_y = aabb[2]
+    support_slice = (aabb[0], aabb[1], foot_y - 0.05, foot_y - 0.001, aabb[4], aabb[5])
+    for bx, by, bz in iter_nearby_blocks(support_slice):
+        baabb = block_aabb(bx, by, bz)
+        if aabb_overlap(support_slice, baabb):
+            return True
     return False
 
 def can_place_block(pos):
     if pos is None:
         return False
     x, y, z = pos
-    if x < -GROUND_SIZE // 2 or x >= GROUND_SIZE // 2:
+    if not is_in_world(x, y, z):
         return False
-    if z < -GROUND_SIZE // 2 or z >= GROUND_SIZE // 2:
-        return False
-    if y < WORLD_MIN_Y or y > WORLD_MAX_Y:
-        return False
-    if (x, y, z) in BLOCKS:
+    if is_block_at(x, y, z):
         return False
     player_aabb = get_player_aabb(player.position)
     block_aabb_vals = block_aabb(x, y, z)
@@ -456,13 +813,20 @@ def main():
                 direction = get_view_direction()
                 hit, prev = raycast_blocks(eye, direction, MAX_REACH)
                 if event.button == 3:
-                    if hit is not None and hit in BLOCKS:
-                        BLOCKS.discard(hit)
+                    if hit is not None and is_block_at(*hit):
+                        if hit in PLACED_BLOCKS:
+                            PLACED_BLOCKS.discard(hit)
+                        elif hit[1] == -1:
+                            REMOVED_GROUND.add(hit)
+                        elif hit[1] <= -2:
+                            REMOVED_STONE.add(hit)
                         BLOCKS_REMOVED += 1
+                        mark_chunk_dirty_at(hit[0], hit[2])
                 if event.button == 1:
                     if can_place_block(prev):
-                        BLOCKS.add(prev)
+                        PLACED_BLOCKS.add(prev)
                         BLOCKS_PLACED += 1
+                        mark_chunk_dirty_at(prev[0], prev[2])
 
         move_dx, move_dz = handle_input()
         if player.crouching and player.on_ground and (move_dx != 0.0 or move_dz != 0.0):

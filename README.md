@@ -21,3 +21,4 @@
 #https://github.com/riku-kai-kun/minepAIycraft
 #リリース
 #https://github.com/riku-kai-kun/minepAIycraft/releases
+
