@@ -1,0 +1,17 @@
+{
+  "main": {
+    "auto_save_on_exit": true,
+    "show_crosshair": true,
+    "show_target_outline": true
+  },
+  "graphics": {
+    "chunk_radius": 4,
+    "cave_render_range": 12,
+    "max_chunk_builds_per_frame": 1
+  },
+  "behavior": {
+    "mouse_sensitivity": 0.1,
+    "move_speed": 0.1,
+    "crouch_speed": 0.05
+  }
+}

@@ -196,3 +196,75 @@ def apply_camera_transform():
         -(s.player.position[1] + world.get_eye_height()),
         -s.player.position[2],
     )
+
+
+def draw_remote_players(players):
+    if not players:
+        return
+
+    def draw_colored_box(width, height, depth, color):
+        hw = width * 0.5
+        hh = height * 0.5
+        hd = depth * 0.5
+        glColor3f(*color)
+        glBegin(GL_QUADS)
+        # Front
+        glVertex3f(-hw, -hh, hd)
+        glVertex3f(hw, -hh, hd)
+        glVertex3f(hw, hh, hd)
+        glVertex3f(-hw, hh, hd)
+        # Back
+        glVertex3f(hw, -hh, -hd)
+        glVertex3f(-hw, -hh, -hd)
+        glVertex3f(-hw, hh, -hd)
+        glVertex3f(hw, hh, -hd)
+        # Left
+        glVertex3f(-hw, -hh, -hd)
+        glVertex3f(-hw, -hh, hd)
+        glVertex3f(-hw, hh, hd)
+        glVertex3f(-hw, hh, -hd)
+        # Right
+        glVertex3f(hw, -hh, hd)
+        glVertex3f(hw, -hh, -hd)
+        glVertex3f(hw, hh, -hd)
+        glVertex3f(hw, hh, hd)
+        # Top
+        glVertex3f(-hw, hh, hd)
+        glVertex3f(hw, hh, hd)
+        glVertex3f(hw, hh, -hd)
+        glVertex3f(-hw, hh, -hd)
+        # Bottom
+        glVertex3f(-hw, -hh, -hd)
+        glVertex3f(hw, -hh, -hd)
+        glVertex3f(hw, -hh, hd)
+        glVertex3f(-hw, -hh, hd)
+        glEnd()
+
+    glDisable(GL_TEXTURE_2D)
+    for player in players.values():
+        pos = player.get("position", [0.0, 0.0, 0.0])
+        glPushMatrix()
+        glTranslatef(float(pos[0]), float(pos[1]), float(pos[2]))
+
+        # Fixed skin (head, torso, legs)
+        glPushMatrix()
+        glTranslatef(0.0, 1.55, 0.0)
+        draw_colored_box(0.42, 0.42, 0.42, (0.95, 0.82, 0.68))
+        glPopMatrix()
+
+        glPushMatrix()
+        glTranslatef(0.0, 0.95, 0.0)
+        draw_colored_box(0.58, 0.68, 0.30, (0.15, 0.45, 0.85))
+        glPopMatrix()
+
+        glPushMatrix()
+        glTranslatef(-0.16, 0.35, 0.0)
+        draw_colored_box(0.24, 0.65, 0.24, (0.20, 0.22, 0.30))
+        glPopMatrix()
+        glPushMatrix()
+        glTranslatef(0.16, 0.35, 0.0)
+        draw_colored_box(0.24, 0.65, 0.24, (0.20, 0.22, 0.30))
+        glPopMatrix()
+
+        glPopMatrix()
+    glEnable(GL_TEXTURE_2D)

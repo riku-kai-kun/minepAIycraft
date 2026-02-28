@@ -5,11 +5,23 @@ from OpenGL.GL import *
 
 from . import state as s
 
+NEIGHBOR_OFFSETS = (
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 0, 1),
+    (0, 0, -1),
+    (0, -1, 0),
+    (0, 1, 0),
+)
+
 
 def init_world():
     s.PLACED_BLOCKS.clear()
     s.REMOVED_GROUND.clear()
     s.REMOVED_STONE.clear()
+    s.PLACED_BLOCKS_BY_CHUNK.clear()
+    s.REMOVED_GROUND_BY_CHUNK.clear()
+    s.REMOVED_STONE_BY_CHUNK.clear()
     for chunk in s.ACTIVE_CHUNKS.values():
         if chunk.display_list:
             glDeleteLists(chunk.display_list, 1)
@@ -110,6 +122,82 @@ def world_to_chunk(x, z):
     return (int(math.floor(x / s.CHUNK_SIZE)), int(math.floor(z / s.CHUNK_SIZE)))
 
 
+def _add_to_chunk_index(index, chunk_key, pos):
+    bucket = index.get(chunk_key)
+    if bucket is None:
+        bucket = set()
+        index[chunk_key] = bucket
+    bucket.add(pos)
+
+
+def _discard_from_chunk_index(index, chunk_key, pos):
+    bucket = index.get(chunk_key)
+    if bucket is None:
+        return
+    bucket.discard(pos)
+    if not bucket:
+        del index[chunk_key]
+
+
+def _chunk_key_from_pos(pos):
+    return world_to_chunk(pos[0], pos[2])
+
+
+def add_placed_block(pos):
+    if pos in s.PLACED_BLOCKS:
+        return False
+    s.PLACED_BLOCKS.add(pos)
+    _add_to_chunk_index(s.PLACED_BLOCKS_BY_CHUNK, _chunk_key_from_pos(pos), pos)
+    return True
+
+
+def discard_placed_block(pos):
+    if pos not in s.PLACED_BLOCKS:
+        return False
+    s.PLACED_BLOCKS.discard(pos)
+    _discard_from_chunk_index(s.PLACED_BLOCKS_BY_CHUNK, _chunk_key_from_pos(pos), pos)
+    return True
+
+
+def add_removed_ground(pos):
+    if pos in s.REMOVED_GROUND:
+        return False
+    s.REMOVED_GROUND.add(pos)
+    _add_to_chunk_index(s.REMOVED_GROUND_BY_CHUNK, _chunk_key_from_pos(pos), pos)
+    return True
+
+
+def add_removed_stone(pos):
+    if pos in s.REMOVED_STONE:
+        return False
+    s.REMOVED_STONE.add(pos)
+    _add_to_chunk_index(s.REMOVED_STONE_BY_CHUNK, _chunk_key_from_pos(pos), pos)
+    return True
+
+
+def remove_block_at(pos):
+    if pos in s.PLACED_BLOCKS:
+        return discard_placed_block(pos)
+    if pos[1] == -1:
+        return add_removed_ground(pos)
+    if pos[1] <= -2:
+        return add_removed_stone(pos)
+    return False
+
+
+@lru_cache(maxsize=512)
+def cave_air_candidates_for_window(min_x, max_x, min_z, max_z, min_y, max_y):
+    if max_y < min_y:
+        return ()
+    candidates = []
+    for x in range(min_x, max_x + 1):
+        for z in range(min_z, max_z + 1):
+            for y in range(min_y, max_y + 1):
+                if is_cave_air(x, y, z):
+                    candidates.append((x, y, z))
+    return tuple(candidates)
+
+
 def chunk_bounds(cx, cz):
     start_x = cx * s.CHUNK_SIZE
     start_z = cz * s.CHUNK_SIZE
@@ -151,20 +239,19 @@ def build_chunk_list(chunk):
     max_x = min(end_x, s.WORLD_MAX_X)
     min_z = max(start_z, s.WORLD_MIN_Z)
     max_z = min(end_z, s.WORLD_MAX_Z)
-    removed_ground = s.REMOVED_GROUND
     removed_stone = s.REMOVED_STONE
     placed_blocks = s.PLACED_BLOCKS
+    removed_ground_by_chunk = s.REMOVED_GROUND_BY_CHUNK
+    removed_stone_by_chunk = s.REMOVED_STONE_BY_CHUNK
     for x in range(min_x, max_x + 1):
         for z in range(min_z, max_z + 1):
-            if (x, -1, z) not in removed_ground and (x, -1, z) not in placed_blocks:
+            if (x, -1, z) not in s.REMOVED_GROUND and (x, -1, z) not in placed_blocks:
                 glPushMatrix()
                 glTranslatef(x, -1, z)
                 rendering.draw_grass_block()
                 glPopMatrix()
 
-    for (x, y, z) in placed_blocks:
-        if x < min_x or x > max_x or z < min_z or z > max_z:
-            continue
+    for (x, y, z) in s.PLACED_BLOCKS_BY_CHUNK.get((cx, cz), ()):
         glPushMatrix()
         glTranslatef(x, y, z)
         rendering.draw_dirt_block()
@@ -172,34 +259,34 @@ def build_chunk_list(chunk):
 
     exposed_stone = set()
     candidates = set()
-    for (ax, ay, az) in removed_ground:
-        if ax < min_x - 1 or ax > max_x + 1 or az < min_z - 1 or az > max_z + 1:
-            continue
-        candidates.add((ax, ay, az))
-    for (ax, ay, az) in removed_stone:
-        if ax < min_x - 1 or ax > max_x + 1 or az < min_z - 1 or az > max_z + 1:
-            continue
-        candidates.add((ax, ay, az))
+    ext_min_x = min_x - 1
+    ext_max_x = max_x + 1
+    ext_min_z = min_z - 1
+    ext_max_z = max_z + 1
+    for nx in range(cx - 1, cx + 2):
+        for nz in range(cz - 1, cz + 2):
+            for (ax, ay, az) in removed_ground_by_chunk.get((nx, nz), ()):
+                if ext_min_x <= ax <= ext_max_x and ext_min_z <= az <= ext_max_z:
+                    candidates.add((ax, ay, az))
+            for (ax, ay, az) in removed_stone_by_chunk.get((nx, nz), ()):
+                if ext_min_x <= ax <= ext_max_x and ext_min_z <= az <= ext_max_z:
+                    candidates.add((ax, ay, az))
 
     center_y = int(round(s.player.position[1]))
     cave_min_y = max(s.CAVE_MIN_Y, center_y - s.CAVE_RENDER_RANGE, s.WORLD_MIN_Y)
     cave_max_y = min(s.CAVE_MAX_Y, center_y + s.CAVE_RENDER_RANGE, -2)
-    if cave_max_y >= cave_min_y:
-        for x in range(min_x - 1, max_x + 2):
-            for z in range(min_z - 1, max_z + 2):
-                for y in range(cave_min_y, cave_max_y + 1):
-                    if is_cave_air(x, y, z):
-                        candidates.add((x, y, z))
+    for pos in cave_air_candidates_for_window(
+        ext_min_x,
+        ext_max_x,
+        ext_min_z,
+        ext_max_z,
+        cave_min_y,
+        cave_max_y,
+    ):
+        candidates.add(pos)
 
     for (ax, ay, az) in candidates:
-        for dx, dy, dz in (
-            (1, 0, 0),
-            (-1, 0, 0),
-            (0, 0, 1),
-            (0, 0, -1),
-            (0, -1, 0),
-            (0, 1, 0),
-        ):
+        for dx, dy, dz in NEIGHBOR_OFFSETS:
             nx, ny, nz = ax + dx, ay + dy, az + dz
             if ny > -2:
                 continue
@@ -221,14 +308,7 @@ def build_chunk_list(chunk):
         if not is_block_at(x, y, z):
             continue
         # Confirm at least one face is exposed to air
-        for dx, dy, dz in (
-            (1, 0, 0),
-            (-1, 0, 0),
-            (0, 0, 1),
-            (0, 0, -1),
-            (0, -1, 0),
-            (0, 1, 0),
-        ):
+        for dx, dy, dz in NEIGHBOR_OFFSETS:
             nx, ny, nz = x + dx, y + dy, z + dz
             if not is_block_at(nx, ny, nz):
                 glPushMatrix()
