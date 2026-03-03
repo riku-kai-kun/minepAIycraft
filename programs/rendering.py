@@ -19,6 +19,166 @@ def draw_stone_cube():
     glCallList(s.CUBE_LIST_STONE)
 
 
+def draw_tall_grass():
+    glDisable(GL_TEXTURE_2D)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glDepthMask(GL_FALSE)
+    glColor4f(0.36, 0.76, 0.28, 0.88)
+    y0 = 0.50
+    y1 = 1.18
+    w = 0.30
+    glBegin(GL_QUADS)
+    # Crossed quads (minecraft-like grass card)
+    glVertex3f(-w, y0, -w)
+    glVertex3f(w, y0, w)
+    glVertex3f(w, y1, w)
+    glVertex3f(-w, y1, -w)
+
+    glVertex3f(w, y0, -w)
+    glVertex3f(-w, y0, w)
+    glVertex3f(-w, y1, w)
+    glVertex3f(w, y1, -w)
+    glEnd()
+    glDepthMask(GL_TRUE)
+    glEnable(GL_TEXTURE_2D)
+
+
+def draw_water_block(
+    level=0,
+    show_top=True,
+    show_bottom=False,
+    show_north=True,
+    show_south=True,
+    show_west=True,
+    show_east=True,
+):
+    level = max(0, min(level, s.WATER_MAX_LEVEL))
+    fill = max(0.22, 0.52 - level * 0.04)
+    top_y = 0.48
+    edge = 0.498
+    bottom_y = -0.498
+    glEnable(GL_TEXTURE_2D)
+    glBindTexture(GL_TEXTURE_2D, s.TEX_WATER)
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glDepthMask(GL_FALSE)
+    glBegin(GL_QUADS)
+    # Top
+    if show_top:
+        glColor4f(0.32, 0.66, 0.98, min(0.72, fill + 0.15))
+        glTexCoord2f(0.0, 0.0)
+        glVertex3f(edge, top_y, -edge)
+        glTexCoord2f(1.0, 0.0)
+        glVertex3f(-edge, top_y, -edge)
+        glTexCoord2f(1.0, 1.0)
+        glVertex3f(-edge, top_y, edge)
+        glTexCoord2f(0.0, 1.0)
+        glVertex3f(edge, top_y, edge)
+    if show_bottom:
+        glColor4f(0.12, 0.34, 0.68, fill)
+        glTexCoord2f(0.0, 0.0)
+        glVertex3f(-edge, bottom_y, -edge)
+        glTexCoord2f(1.0, 0.0)
+        glVertex3f(edge, bottom_y, -edge)
+        glTexCoord2f(1.0, 1.0)
+        glVertex3f(edge, bottom_y, edge)
+        glTexCoord2f(0.0, 1.0)
+        glVertex3f(-edge, bottom_y, edge)
+    # Front (+Z)
+    if show_south:
+        glColor4f(0.16, 0.45, 0.90, fill)
+        glTexCoord2f(0.0, 1.0)
+        glVertex3f(edge, bottom_y, edge)
+        glTexCoord2f(1.0, 1.0)
+        glVertex3f(-edge, bottom_y, edge)
+        glTexCoord2f(1.0, 0.0)
+        glVertex3f(-edge, top_y, edge)
+        glTexCoord2f(0.0, 0.0)
+        glVertex3f(edge, top_y, edge)
+    # Back (-Z)
+    if show_north:
+        glColor4f(0.16, 0.45, 0.90, fill)
+        glTexCoord2f(0.0, 1.0)
+        glVertex3f(-edge, bottom_y, -edge)
+        glTexCoord2f(1.0, 1.0)
+        glVertex3f(edge, bottom_y, -edge)
+        glTexCoord2f(1.0, 0.0)
+        glVertex3f(edge, top_y, -edge)
+        glTexCoord2f(0.0, 0.0)
+        glVertex3f(-edge, top_y, -edge)
+    # Left (-X)
+    if show_west:
+        glColor4f(0.16, 0.45, 0.90, fill)
+        glTexCoord2f(0.0, 1.0)
+        glVertex3f(-edge, bottom_y, edge)
+        glTexCoord2f(1.0, 1.0)
+        glVertex3f(-edge, bottom_y, -edge)
+        glTexCoord2f(1.0, 0.0)
+        glVertex3f(-edge, top_y, -edge)
+        glTexCoord2f(0.0, 0.0)
+        glVertex3f(-edge, top_y, edge)
+    # Right (+X)
+    if show_east:
+        glColor4f(0.16, 0.45, 0.90, fill)
+        glTexCoord2f(0.0, 1.0)
+        glVertex3f(edge, bottom_y, -edge)
+        glTexCoord2f(1.0, 1.0)
+        glVertex3f(edge, bottom_y, edge)
+        glTexCoord2f(1.0, 0.0)
+        glVertex3f(edge, top_y, edge)
+        glTexCoord2f(0.0, 0.0)
+        glVertex3f(edge, top_y, -edge)
+    glEnd()
+    glDepthMask(GL_TRUE)
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE)
+
+
+def update_environment_effects():
+    underwater = world.is_player_in_water()
+    if underwater:
+        glClearColor(0.10, 0.28, 0.42, 1.0)
+        glEnable(GL_FOG)
+        fog_color = (GLfloat * 4)(0.12, 0.32, 0.48, 1.0)
+        glFogfv(GL_FOG_COLOR, fog_color)
+        glFogi(GL_FOG_MODE, GL_LINEAR)
+        glFogf(GL_FOG_START, 1.5)
+        glFogf(GL_FOG_END, 18.0)
+    else:
+        glClearColor(*s.SKY_COLOR)
+        glDisable(GL_FOG)
+
+
+def draw_underwater_overlay():
+    if not world.is_player_in_water():
+        return
+    glDisable(GL_TEXTURE_2D)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    glOrtho(0, s.SCREEN_WIDTH, s.SCREEN_HEIGHT, 0, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+    glDisable(GL_DEPTH_TEST)
+    glColor4f(0.10, 0.35, 0.52, 0.25)
+    glBegin(GL_QUADS)
+    glVertex2f(0, 0)
+    glVertex2f(s.SCREEN_WIDTH, 0)
+    glVertex2f(s.SCREEN_WIDTH, s.SCREEN_HEIGHT)
+    glVertex2f(0, s.SCREEN_HEIGHT)
+    glEnd()
+    glEnable(GL_DEPTH_TEST)
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+    glEnable(GL_TEXTURE_2D)
+
+
 def draw_cube_edges():
     glDisable(GL_TEXTURE_2D)
     glColor3f(0.0, 0.0, 0.0)
@@ -40,6 +200,8 @@ def init_gl():
     glClearColor(*s.SKY_COLOR)
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_TEXTURE_2D)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE)
     glLineWidth(1.0)
     load_textures()
@@ -75,6 +237,7 @@ def load_textures():
     s.TEX_GRASS_TOP = load_texture(s.TEXTURE_GRASS_TOP)
     s.TEX_DIRT = load_texture(s.TEXTURE_DIRT)
     s.TEX_STONE = load_texture(s.TEXTURE_STONE)
+    s.TEX_WATER = load_texture(s.TEXTURE_WATER)
 
 
 def build_cube_list():

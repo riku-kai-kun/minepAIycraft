@@ -1,4 +1,6 @@
 import math
+import time
+from collections import deque
 from functools import lru_cache
 
 from OpenGL.GL import *
@@ -15,13 +17,16 @@ NEIGHBOR_OFFSETS = (
 )
 
 
-def init_world():
+def init_world(generate_oceans=True):
     s.PLACED_BLOCKS.clear()
     s.REMOVED_GROUND.clear()
     s.REMOVED_STONE.clear()
     s.PLACED_BLOCKS_BY_CHUNK.clear()
     s.REMOVED_GROUND_BY_CHUNK.clear()
     s.REMOVED_STONE_BY_CHUNK.clear()
+    s.WATER_SOURCES.clear()
+    s.WATER_BLOCKS.clear()
+    s.WATER_BLOCKS_BY_CHUNK.clear()
     for chunk in s.ACTIVE_CHUNKS.values():
         if chunk.display_list:
             glDeleteLists(chunk.display_list, 1)
@@ -29,6 +34,11 @@ def init_world():
     s.LAST_PLAYER_CHUNK = None
     s.LAST_PLAYER_Y = None
     s.CHUNKS_NEED_UPDATE = True
+    s.WATER_NEEDS_UPDATE = True
+    s.LAST_WATER_UPDATE = 0.0
+    if generate_oceans:
+        generate_ocean_basins()
+    rebuild_water(force=True)
 
 
 def is_in_world(x, y, z):
@@ -46,13 +56,47 @@ def is_block_at(x, y, z):
         return False
     if (x, y, z) in s.PLACED_BLOCKS:
         return True
-    if y == -1:
-        return (x, y, z) not in s.REMOVED_GROUND
+    if y >= -1:
+        return is_natural_terrain_at(x, y, z)
     if y <= -2:
         if is_cave_air(x, y, z):
             return False
         return (x, y, z) not in s.REMOVED_STONE
     return (x, y, z) in s.PLACED_BLOCKS
+
+
+@lru_cache(maxsize=400000)
+def get_surface_height(x, z):
+    # Flat world(-1)ベースに、疎な山塊を重ねる
+    macro = value_noise_3d(x, 0, z, 0.010, s.CAVE_SEED + 401)
+    detail = value_noise_3d(x + 913, 0, z - 417, 0.034, s.CAVE_SEED + 457)
+    mask = max(0.0, (macro - 0.57) / 0.43)
+    height = int(round((mask ** 1.65) * s.MOUNTAIN_HEIGHT_SCALE + (detail - 0.5) * 4))
+    if height < 0:
+        height = 0
+    return min(s.WORLD_MAX_Y, -1 + height)
+
+
+def is_natural_terrain_at(x, y, z):
+    if y < -1:
+        return False
+    top = get_surface_height(x, z)
+    if y > top:
+        return False
+    return (x, y, z) not in s.REMOVED_GROUND
+
+
+def should_spawn_tall_grass(x, y, z):
+    if is_block_at(x, y + 1, z):
+        return False
+    if is_water_at(x, y + 1, z):
+        return False
+    # 低周波+高周波ノイズを混ぜて、列状パターンを避ける
+    n1 = value_noise_3d(x + 137, 0, z - 241, 0.18, s.CAVE_SEED + 911)
+    n2 = value_noise_3d(x - 59, 0, z + 83, 0.43, s.CAVE_SEED + 977)
+    jitter = _hash_float(x, 0, z, s.CAVE_SEED + 1031) * 0.12
+    density = n1 * 0.72 + n2 * 0.28 + jitter
+    return density > s.TALL_GRASS_SPAWN_THRESHOLD
 
 
 @lru_cache(maxsize=500000)
@@ -146,8 +190,10 @@ def _chunk_key_from_pos(pos):
 def add_placed_block(pos):
     if pos in s.PLACED_BLOCKS:
         return False
+    remove_water_source(pos)
     s.PLACED_BLOCKS.add(pos)
     _add_to_chunk_index(s.PLACED_BLOCKS_BY_CHUNK, _chunk_key_from_pos(pos), pos)
+    s.WATER_NEEDS_UPDATE = True
     return True
 
 
@@ -156,6 +202,7 @@ def discard_placed_block(pos):
         return False
     s.PLACED_BLOCKS.discard(pos)
     _discard_from_chunk_index(s.PLACED_BLOCKS_BY_CHUNK, _chunk_key_from_pos(pos), pos)
+    s.WATER_NEEDS_UPDATE = True
     return True
 
 
@@ -164,6 +211,7 @@ def add_removed_ground(pos):
         return False
     s.REMOVED_GROUND.add(pos)
     _add_to_chunk_index(s.REMOVED_GROUND_BY_CHUNK, _chunk_key_from_pos(pos), pos)
+    s.WATER_NEEDS_UPDATE = True
     return True
 
 
@@ -172,17 +220,302 @@ def add_removed_stone(pos):
         return False
     s.REMOVED_STONE.add(pos)
     _add_to_chunk_index(s.REMOVED_STONE_BY_CHUNK, _chunk_key_from_pos(pos), pos)
+    s.WATER_NEEDS_UPDATE = True
+    return True
+
+
+def is_water_at(x, y, z):
+    return (x, y, z) in s.WATER_BLOCKS
+
+
+def add_water_source(pos):
+    x, y, z = int(pos[0]), int(pos[1]), int(pos[2])
+    tpos = (x, y, z)
+    if not is_in_world(x, y, z):
+        return False
+    if is_block_at(x, y, z):
+        return False
+    if tpos in s.WATER_SOURCES:
+        return False
+    s.WATER_SOURCES.add(tpos)
+    s.WATER_NEEDS_UPDATE = True
+    return True
+
+
+def remove_water_source(pos):
+    x, y, z = int(pos[0]), int(pos[1]), int(pos[2])
+    tpos = (x, y, z)
+    if tpos not in s.WATER_SOURCES:
+        return False
+    s.WATER_SOURCES.discard(tpos)
+    s.WATER_NEEDS_UPDATE = True
     return True
 
 
 def remove_block_at(pos):
     if pos in s.PLACED_BLOCKS:
         return discard_placed_block(pos)
-    if pos[1] == -1:
+    x, y, z = pos
+    if y >= -1 and is_natural_terrain_at(x, y, z):
         return add_removed_ground(pos)
-    if pos[1] <= -2:
+    if y <= -2:
         return add_removed_stone(pos)
     return False
+
+
+def generate_ocean_basins():
+    # Spawn付近に固定の海盆地を作る。水は水源から流して埋める。
+    basins = (
+        ((28, 12), 16, 9),
+        ((-34, -18), 22, 13),
+        ((64, -42), 18, 10),
+    )
+    for (cx, cz), radius, max_depth in basins:
+        r2 = radius * radius
+        for x in range(cx - radius, cx + radius + 1):
+            for z in range(cz - radius, cz + radius + 1):
+                dx = x - cx
+                dz = z - cz
+                dist2 = dx * dx + dz * dz
+                if dist2 > r2:
+                    continue
+                ring = math.sqrt(dist2) / float(radius)
+                depth = max(3, int(round((1.0 - ring) * max_depth)))
+                if depth <= 0:
+                    continue
+                top = get_surface_height(x, z)
+                for y in range(-1, top + 1):
+                    add_removed_ground((x, y, z))
+                for y in range(-2, -depth - 2, -1):
+                    add_removed_stone((x, y, z))
+                # Surface heightを地表穴(-1)に合わせて、外部(通常は空中)へ溢れないようにする
+                if not is_block_at(x, -1, z):
+                    add_water_source((x, -1, z))
+
+
+def _commit_water_map(new_levels):
+    old_levels = s.WATER_BLOCKS
+    old_positions = set(old_levels.keys())
+    new_positions = set(new_levels.keys())
+    removed = old_positions - new_positions
+    added = new_positions - old_positions
+    changed_level = {
+        pos for pos in (old_positions & new_positions)
+        if old_levels.get(pos) != new_levels.get(pos)
+    }
+
+    for pos in removed:
+        key = world_to_chunk(pos[0], pos[2])
+        bucket = s.WATER_BLOCKS_BY_CHUNK.get(key)
+        if bucket is not None:
+            bucket.pop(pos, None)
+            if not bucket:
+                del s.WATER_BLOCKS_BY_CHUNK[key]
+
+    for pos in (added | changed_level):
+        key = world_to_chunk(pos[0], pos[2])
+        bucket = s.WATER_BLOCKS_BY_CHUNK.get(key)
+        if bucket is None:
+            bucket = {}
+            s.WATER_BLOCKS_BY_CHUNK[key] = bucket
+        bucket[pos] = new_levels[pos]
+
+    s.WATER_BLOCKS = new_levels
+    for x, _, z in (removed | added | changed_level):
+        mark_chunk_dirty_at(x, z)
+
+
+def _iter_chunk_keys_for_bounds(min_x, max_x, min_z, max_z):
+    min_cx = int(math.floor(min_x / s.CHUNK_SIZE))
+    max_cx = int(math.floor(max_x / s.CHUNK_SIZE))
+    min_cz = int(math.floor(min_z / s.CHUNK_SIZE))
+    max_cz = int(math.floor(max_z / s.CHUNK_SIZE))
+    for cx in range(min_cx, max_cx + 1):
+        for cz in range(min_cz, max_cz + 1):
+            yield (cx, cz)
+
+
+def _in_bounds(pos, bounds):
+    x, _, z = pos
+    min_x, max_x, min_z, max_z = bounds
+    return min_x <= x <= max_x and min_z <= z <= max_z
+
+
+def _water_sim_bounds():
+    px, pz = s.player.position[0], s.player.position[2]
+    pcx, pcz = world_to_chunk(px, pz)
+    radius = s.CHUNK_RADIUS + s.WATER_SIM_MARGIN_CHUNKS
+    min_cx = pcx - radius
+    max_cx = pcx + radius
+    min_cz = pcz - radius
+    max_cz = pcz + radius
+    min_x = max(s.WORLD_MIN_X, min_cx * s.CHUNK_SIZE)
+    max_x = min(s.WORLD_MAX_X, (max_cx + 1) * s.CHUNK_SIZE - 1)
+    min_z = max(s.WORLD_MIN_Z, min_cz * s.CHUNK_SIZE)
+    max_z = min(s.WORLD_MAX_Z, (max_cz + 1) * s.CHUNK_SIZE - 1)
+    return (min_x, max_x, min_z, max_z)
+
+
+def _commit_water_partial(local_next, bounds):
+    min_x, max_x, min_z, max_z = bounds
+    current_positions = set()
+    for key in _iter_chunk_keys_for_bounds(min_x, max_x, min_z, max_z):
+        bucket = s.WATER_BLOCKS_BY_CHUNK.get(key, {})
+        for pos in bucket.keys():
+            if _in_bounds(pos, bounds):
+                current_positions.add(pos)
+
+    new_positions = set(local_next.keys())
+    removed = current_positions - new_positions
+    added = new_positions - current_positions
+    changed_level = {
+        pos for pos in (current_positions & new_positions)
+        if s.WATER_BLOCKS.get(pos) != local_next.get(pos)
+    }
+
+    for pos in removed:
+        s.WATER_BLOCKS.pop(pos, None)
+        key = world_to_chunk(pos[0], pos[2])
+        bucket = s.WATER_BLOCKS_BY_CHUNK.get(key)
+        if bucket is not None:
+            bucket.pop(pos, None)
+            if not bucket:
+                del s.WATER_BLOCKS_BY_CHUNK[key]
+
+    for pos in (added | changed_level):
+        s.WATER_BLOCKS[pos] = local_next[pos]
+        key = world_to_chunk(pos[0], pos[2])
+        bucket = s.WATER_BLOCKS_BY_CHUNK.get(key)
+        if bucket is None:
+            bucket = {}
+            s.WATER_BLOCKS_BY_CHUNK[key] = bucket
+        bucket[pos] = local_next[pos]
+
+    for x, _, z in (removed | added | changed_level):
+        mark_chunk_dirty_at(x, z)
+
+
+def rebuild_water(force=False):
+    if not force and not s.WATER_NEEDS_UPDATE:
+        return
+    new_levels = {}
+    queue = deque()
+
+    for source in tuple(s.WATER_SOURCES):
+        if is_in_world(source[0], source[1], source[2]) and not is_block_at(source[0], source[1], source[2]):
+            queue.append((source, 0))
+
+    while queue:
+        (x, y, z), level = queue.popleft()
+        if not is_in_world(x, y, z):
+            continue
+        if is_block_at(x, y, z):
+            continue
+        prev = new_levels.get((x, y, z))
+        if prev is not None and prev <= level:
+            continue
+        new_levels[(x, y, z)] = level
+
+        below = (x, y - 1, z)
+        if is_in_world(below[0], below[1], below[2]) and not is_block_at(below[0], below[1], below[2]):
+            queue.append((below, level))
+
+        if level >= s.WATER_MAX_LEVEL:
+            continue
+        next_level = level + 1
+        for nx, ny, nz in ((x + 1, y, z), (x - 1, y, z), (x, y, z + 1), (x, y, z - 1)):
+            if is_in_world(nx, ny, nz) and not is_block_at(nx, ny, nz):
+                queue.append(((nx, ny, nz), next_level))
+
+    _commit_water_map(new_levels)
+    s.WATER_NEEDS_UPDATE = False
+
+
+def _step_water_flow(bounds):
+    prev = s.WATER_BLOCKS
+    min_x, max_x, min_z, max_z = bounds
+    influence_bounds = (min_x - 1, max_x + 1, min_z - 1, max_z + 1)
+
+    candidates = set()
+    for src in s.WATER_SOURCES:
+        if _in_bounds(src, influence_bounds):
+            candidates.add(src)
+
+    for key in _iter_chunk_keys_for_bounds(*influence_bounds):
+        bucket = s.WATER_BLOCKS_BY_CHUNK.get(key, {})
+        for x, y, z in bucket.keys():
+            if not _in_bounds((x, y, z), influence_bounds):
+                continue
+            candidates.add((x, y, z))
+            candidates.add((x + 1, y, z))
+            candidates.add((x - 1, y, z))
+            candidates.add((x, y + 1, z))
+            candidates.add((x, y - 1, z))
+            candidates.add((x, y, z + 1))
+            candidates.add((x, y, z - 1))
+
+    local_next = {}
+    for x, y, z in candidates:
+        if x < min_x or x > max_x or z < min_z or z > max_z:
+            continue
+        if not is_in_world(x, y, z):
+            continue
+        if is_block_at(x, y, z):
+            continue
+        pos = (x, y, z)
+        if pos in s.WATER_SOURCES:
+            local_next[pos] = 0
+            continue
+
+        best = None
+        up = (x, y + 1, z)
+        below = (x, y - 1, z)
+        old = prev.get(pos)
+
+        up_level = prev.get(up)
+        if up_level is not None:
+            best = up_level if best is None else min(best, up_level)
+
+        can_fall = is_in_world(below[0], below[1], below[2]) and not is_block_at(below[0], below[1], below[2])
+        if can_fall:
+            if old is not None or up_level is not None:
+                best = 0 if best is None else min(best, 0)
+            else:
+                for npos in ((x + 1, y, z), (x - 1, y, z), (x, y, z + 1), (x, y, z - 1)):
+                    if prev.get(npos) is not None:
+                        best = 0 if best is None else min(best, 0)
+                        break
+
+        supported = is_block_at(below[0], below[1], below[2]) or (below in prev) or (below in s.WATER_SOURCES)
+        if supported:
+            for npos in ((x + 1, y, z), (x - 1, y, z), (x, y, z + 1), (x, y, z - 1)):
+                nlevel = prev.get(npos)
+                if nlevel is None:
+                    continue
+                if nlevel >= s.WATER_MAX_LEVEL:
+                    continue
+                cand = nlevel + 1
+                best = cand if best is None else min(best, cand)
+
+        if best is None and old is not None and old < s.WATER_MAX_LEVEL:
+            best = old + 1
+
+        if best is not None and best <= s.WATER_MAX_LEVEL:
+            local_next[pos] = best
+
+    _commit_water_partial(local_next, bounds)
+    s.WATER_NEEDS_UPDATE = False
+
+
+def update_water_flow(force=False):
+    now = time.time()
+    if force:
+        s.LAST_WATER_UPDATE = now
+        rebuild_water(force=True)
+        return
+    if (now - s.LAST_WATER_UPDATE) >= s.WATER_UPDATE_INTERVAL:
+        s.LAST_WATER_UPDATE = now
+        _step_water_flow(_water_sim_bounds())
 
 
 @lru_cache(maxsize=512)
@@ -245,10 +578,29 @@ def build_chunk_list(chunk):
     removed_stone_by_chunk = s.REMOVED_STONE_BY_CHUNK
     for x in range(min_x, max_x + 1):
         for z in range(min_z, max_z + 1):
-            if (x, -1, z) not in s.REMOVED_GROUND and (x, -1, z) not in placed_blocks:
+            top = get_surface_height(x, z)
+            for y in range(-1, top + 1):
+                if (x, y, z) in s.REMOVED_GROUND:
+                    continue
+                if (x, y, z) in placed_blocks:
+                    continue
+                exposed = False
+                for dx, dy, dz in NEIGHBOR_OFFSETS:
+                    if not is_block_at(x + dx, y + dy, z + dz):
+                        exposed = True
+                        break
+                if not exposed:
+                    continue
                 glPushMatrix()
-                glTranslatef(x, -1, z)
-                rendering.draw_grass_block()
+                glTranslatef(x, y, z)
+                if y == top:
+                    rendering.draw_grass_block()
+                    if should_spawn_tall_grass(x, y, z):
+                        rendering.draw_tall_grass()
+                elif y >= top - 3:
+                    rendering.draw_dirt_block()
+                else:
+                    rendering.draw_stone_cube()
                 glPopMatrix()
 
     for (x, y, z) in s.PLACED_BLOCKS_BY_CHUNK.get((cx, cz), ()):
@@ -316,6 +668,31 @@ def build_chunk_list(chunk):
                 rendering.draw_stone_cube()
                 glPopMatrix()
                 break
+
+    # 半透明水は最後に描画して見た目を安定させる
+    for (x, y, z), level in s.WATER_BLOCKS_BY_CHUNK.get((cx, cz), {}).items():
+        if is_block_at(x, y, z):
+            continue
+        show_top = not is_water_at(x, y + 1, z)
+        show_bottom = (not is_water_at(x, y - 1, z)) and (not is_block_at(x, y - 1, z))
+        show_north = not is_water_at(x, y, z - 1)
+        show_south = not is_water_at(x, y, z + 1)
+        show_west = not is_water_at(x - 1, y, z)
+        show_east = not is_water_at(x + 1, y, z)
+        if not (show_top or show_bottom or show_north or show_south or show_west or show_east):
+            continue
+        glPushMatrix()
+        glTranslatef(x, y, z)
+        rendering.draw_water_block(
+            level,
+            show_top=show_top,
+            show_bottom=show_bottom,
+            show_north=show_north,
+            show_south=show_south,
+            show_west=show_west,
+            show_east=show_east,
+        )
+        glPopMatrix()
     glEndList()
     chunk.dirty = False
 
@@ -594,3 +971,20 @@ def can_place_block(pos):
     if aabb_overlap(player_aabb, block_aabb_vals):
         return False
     return True
+
+
+def point_to_block(x, y, z):
+    return (
+        int(math.floor(x + 0.5)),
+        int(math.floor(y + 0.5)),
+        int(math.floor(z + 0.5)),
+    )
+
+
+def is_player_in_water():
+    # 頭と胴体の2点判定。どちらかが水なら水中扱い。
+    px, py, pz = s.player.position
+    top_y = py + max(0.2, get_player_height() * 0.75)
+    bx1, by1, bz1 = point_to_block(px, py + 0.2, pz)
+    bx2, by2, bz2 = point_to_block(px, top_y, pz)
+    return is_water_at(bx1, by1, bz1) or is_water_at(bx2, by2, bz2)

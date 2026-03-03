@@ -27,14 +27,17 @@ from programs.settings_system import (
 )
 from programs.rendering import (
     init_gl,
+    update_environment_effects,
     draw_ground,
     draw_target_block_outline,
     draw_crosshair,
+    draw_underwater_overlay,
     apply_camera_transform,
     draw_remote_players,
 )
 from programs.world import (
     init_world,
+    update_water_flow,
     raycast_blocks,
     get_view_direction,
     get_eye_height,
@@ -44,6 +47,7 @@ from programs.world import (
     mark_chunk_dirty_at,
     resolve_collisions,
     is_supported,
+    is_player_in_water,
     get_target_block,
 )
 
@@ -104,6 +108,9 @@ def main():
         s.player.velocity_y = 0.0
         s.player.on_ground = False
         s.player.crouching = False
+        s.player.sprinting = False
+        s.player.last_w_tap_time = -999.0
+        s.player.prev_w_pressed = False
         s.camera.rotation = [0.0, 0.0]
 
     if action in ("new", "load", "mp_host"):
@@ -262,14 +269,22 @@ def main():
                 move_dz = 0.0
 
         s.player.on_ground = False
-        s.player.velocity_y += s.GRAVITY
+        if is_player_in_water():
+            s.player.velocity_y += s.WATER_GRAVITY
+            if s.player.velocity_y < -0.06:
+                s.player.velocity_y = -0.06
+        else:
+            s.player.velocity_y += s.GRAVITY
         resolve_collisions(move_dx, s.player.velocity_y, move_dz)
         mp_session.send_local_state(s.player.position, s.camera.rotation)
+        update_water_flow()
 
+        update_environment_effects()
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         apply_camera_transform()
         draw_ground()
         draw_remote_players(mp_session.get_remote_players())
+        draw_underwater_overlay()
         target = get_target_block()
         if s.SHOW_TARGET_OUTLINE:
             draw_target_block_outline(target)

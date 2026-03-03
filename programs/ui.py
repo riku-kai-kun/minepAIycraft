@@ -14,10 +14,16 @@ SETTINGS_LAYOUT = [
     ("graphics", "chunk_radius"),
     ("graphics", "cave_render_range"),
     ("graphics", "max_chunk_builds_per_frame"),
+    ("graphics", "water_update_interval"),
+    ("graphics", "water_sim_margin_chunks"),
+    ("graphics", "mountain_height_scale"),
+    ("graphics", "tall_grass_spawn_threshold"),
     ("behavior", "Behavior"),
     ("behavior", "mouse_sensitivity"),
     ("behavior", "move_speed"),
     ("behavior", "crouch_speed"),
+    ("behavior", "dash_speed_multiplier"),
+    ("behavior", "dash_double_tap_window"),
 ]
 
 DISPLAY_LABELS = {
@@ -27,9 +33,15 @@ DISPLAY_LABELS = {
     "chunk_radius": "Chunk Radius",
     "cave_render_range": "Cave Render Range",
     "max_chunk_builds_per_frame": "Chunk Builds / Frame",
+    "water_update_interval": "Water Update Interval",
+    "water_sim_margin_chunks": "Water Sim Margin Chunks",
+    "mountain_height_scale": "Mountain Height Scale",
+    "tall_grass_spawn_threshold": "Tall Grass Density",
     "mouse_sensitivity": "Mouse Sensitivity",
     "move_speed": "Move Speed",
     "crouch_speed": "Crouch Speed",
+    "dash_speed_multiplier": "Dash Speed Multiplier",
+    "dash_double_tap_window": "Dash Double Tap Window",
 }
 
 _UI_ASSETS = None
@@ -306,7 +318,7 @@ def _draw_multiplayer_menu(
     }
 
 
-def _draw_settings_menu(screen, fonts, screen_width, screen_height, editable_settings):
+def _draw_settings_menu(screen, fonts, screen_width, screen_height, editable_settings, scroll_index):
     title_font, info_font, button_font, slot_font = fonts
     assets = _load_ui_assets()
 
@@ -317,28 +329,26 @@ def _draw_settings_menu(screen, fonts, screen_width, screen_height, editable_set
     hover_back = back_button.collidepoint(mouse_pos)
     hover_apply = apply_button.collidepoint(mouse_pos)
 
-    rows = []
-    y = 120
-    row_height = 38
+    all_rows = []
     for section, key in SETTINGS_LAYOUT:
         if key in ("Main", "Graphics", "Behavior"):
-            rows.append({"type": "header", "text": key, "y": y})
-            y += 34
+            all_rows.append({"type": "header", "text": key})
             continue
-        row_rect = pygame.Rect(80, y, screen_width - 160, row_height)
-        left_rect = pygame.Rect(row_rect.right - 160, y + 5, 28, 28)
-        right_rect = pygame.Rect(row_rect.right - 36, y + 5, 28, 28)
-        rows.append(
+        all_rows.append(
             {
                 "type": "setting",
                 "section": section,
                 "key": key,
-                "row_rect": row_rect,
-                "left_rect": left_rect,
-                "right_rect": right_rect,
             }
         )
-        y += 42
+
+    max_visible_rows = max(1, (screen_height - 190) // 42)
+    max_scroll = max(0, len(all_rows) - max_visible_rows)
+    scroll_index = min(scroll_index, max_scroll)
+    visible_rows = all_rows[scroll_index:scroll_index + max_visible_rows]
+
+    rows = []
+    y = 98
 
     screen.fill((240, 228, 200))
 
@@ -346,12 +356,27 @@ def _draw_settings_menu(screen, fonts, screen_width, screen_height, editable_set
     title_rect = title_surface.get_rect(center=(screen_width // 2, 52))
     screen.blit(title_surface, title_rect)
 
-    for row in rows:
-        if row["type"] == "header":
+    for item in visible_rows:
+        if item["type"] == "header":
+            row = {"type": "header", "text": item["text"], "y": y}
             text = info_font.render(row["text"], True, (65, 45, 20))
             screen.blit(text, (90, row["y"]))
+            rows.append(row)
+            y += 30
             continue
 
+        row_rect = pygame.Rect(80, y, screen_width - 160, 38)
+        left_rect = pygame.Rect(row_rect.right - 160, y + 5, 28, 28)
+        right_rect = pygame.Rect(row_rect.right - 36, y + 5, 28, 28)
+        row = {
+            "type": "setting",
+            "section": item["section"],
+            "key": item["key"],
+            "row_rect": row_rect,
+            "left_rect": left_rect,
+            "right_rect": right_rect,
+        }
+        rows.append(row)
         section = row["section"]
         key = row["key"]
         value = editable_settings[section][key]
@@ -376,6 +401,7 @@ def _draw_settings_menu(screen, fonts, screen_width, screen_height, editable_set
         right_text = button_font.render(">", True, (55, 45, 28))
         screen.blit(left_text, left_text.get_rect(center=row["left_rect"].center))
         screen.blit(right_text, right_text.get_rect(center=row["right_rect"].center))
+        y += 42
 
     _draw_image_button(
         screen,
@@ -401,6 +427,8 @@ def _draw_settings_menu(screen, fonts, screen_width, screen_height, editable_set
         "apply_button": apply_button,
         "hover_back": hover_back,
         "hover_apply": hover_apply,
+        "max_scroll": max_scroll,
+        "scroll_index": scroll_index,
     }
 
 
@@ -424,6 +452,7 @@ def run_start_menu(screen_width, screen_height, caption, save_slots, settings, a
     mp_status_text = ""
     current_settings = _copy_settings(settings)
     editable_settings = _copy_settings(current_settings)
+    settings_scroll_index = 0
 
     while True:
         if mode == "main":
@@ -445,7 +474,9 @@ def run_start_menu(screen_width, screen_height, caption, save_slots, settings, a
                     screen_width,
                     screen_height,
                     editable_settings,
+                    settings_scroll_index,
                 )
+                settings_scroll_index = ui_state["scroll_index"]
             else:
                 ui_state = _draw_multiplayer_menu(
                     screen,
@@ -490,6 +521,7 @@ def run_start_menu(screen_width, screen_height, caption, save_slots, settings, a
                         return {"action": "load", "slot": selected_slot, "settings": current_settings}
                     if ui_state["settings_button"].collidepoint(event.pos):
                         editable_settings = _copy_settings(current_settings)
+                        settings_scroll_index = 0
                         mode = "settings"
                         continue
                     if ui_state["multiplayer_button"].collidepoint(event.pos):
@@ -502,6 +534,15 @@ def run_start_menu(screen_width, screen_height, caption, save_slots, settings, a
                             selected_slot = slot_name
                             break
             elif mode == "settings":
+                if event.type == KEYDOWN and event.key == K_UP:
+                    settings_scroll_index = max(0, settings_scroll_index - 1)
+                if event.type == KEYDOWN and event.key == K_DOWN:
+                    settings_scroll_index = min(ui_state["max_scroll"], settings_scroll_index + 1)
+                if event.type == MOUSEWHEEL:
+                    if event.y > 0:
+                        settings_scroll_index = max(0, settings_scroll_index - 1)
+                    elif event.y < 0:
+                        settings_scroll_index = min(ui_state["max_scroll"], settings_scroll_index + 1)
                 if event.type == MOUSEBUTTONDOWN and event.button == 1:
                     if ui_state["hover_back"]:
                         editable_settings = _copy_settings(current_settings)

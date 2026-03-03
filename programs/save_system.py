@@ -65,6 +65,7 @@ def _serialize():
             "placed_blocks": [list(pos) for pos in sorted(s.PLACED_BLOCKS)],
             "removed_ground": [list(pos) for pos in sorted(s.REMOVED_GROUND)],
             "removed_stone": [list(pos) for pos in sorted(s.REMOVED_STONE)],
+            "water_sources": [list(pos) for pos in sorted(s.WATER_SOURCES)],
         },
     }
 
@@ -96,7 +97,7 @@ def load_from_slot(base_dir, slot_name):
 
 
 def apply_loaded_data(data):
-    world.init_world()
+    world.init_world(generate_oceans=False)
 
     world_data = data.get("world", {})
     for pos in world_data.get("placed_blocks", []):
@@ -105,6 +106,8 @@ def apply_loaded_data(data):
         world.add_removed_ground((int(pos[0]), int(pos[1]), int(pos[2])))
     for pos in world_data.get("removed_stone", []):
         world.add_removed_stone((int(pos[0]), int(pos[1]), int(pos[2])))
+    for pos in world_data.get("water_sources", []):
+        world.add_water_source((int(pos[0]), int(pos[1]), int(pos[2])))
 
     player_data = data.get("player", {})
     position = player_data.get("position", [0.0, 0.0, 0.0])
@@ -118,3 +121,4 @@ def apply_loaded_data(data):
     s.camera.rotation = [float(rotation[0]), float(rotation[1])]
 
     s.CHUNKS_NEED_UPDATE = True
+    world.update_water_flow(force=True)

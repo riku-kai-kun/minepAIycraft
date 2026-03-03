@@ -442,6 +442,7 @@ class RelayServer:
             placed = world.setdefault("placed_blocks", [])
             removed_ground = world.setdefault("removed_ground", [])
             removed_stone = world.setdefault("removed_stone", [])
+            water_sources = world.setdefault("water_sources", [])
 
             tpos = [int(pos[0]), int(pos[1]), int(pos[2])]
 
@@ -454,11 +455,12 @@ class RelayServer:
             if action == "place":
                 remove_from(removed_ground)
                 remove_from(removed_stone)
+                remove_from(water_sources)
                 if tpos not in placed:
                     placed.append(tpos)
             elif action == "remove":
                 remove_from(placed)
-                if tpos[1] == -1:
+                if tpos[1] >= -1:
                     if tpos not in removed_ground:
                         removed_ground.append(tpos)
                 elif tpos[1] <= -2:

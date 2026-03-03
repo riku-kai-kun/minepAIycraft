@@ -7,11 +7,17 @@
   "graphics": {
     "chunk_radius": 4,
     "cave_render_range": 12,
-    "max_chunk_builds_per_frame": 1
+    "max_chunk_builds_per_frame": 1,
+    "water_update_interval": 0.2,
+    "water_sim_margin_chunks": 2,
+    "mountain_height_scale": 28,
+    "tall_grass_spawn_threshold": 0.76
   },
   "behavior": {
     "mouse_sensitivity": 0.1,
     "move_speed": 0.1,
-    "crouch_speed": 0.05
+    "crouch_speed": 0.05,
+    "dash_speed_multiplier": 1.8,
+    "dash_double_tap_window": 0.28
   }
 }
