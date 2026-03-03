@@ -49,14 +49,14 @@
 #
 #3) 操作
 #- ダッシュを追加
-# - Wキーを素早く2回押す、またはCtrl+Wで開始
-# - Wキーを離すとダッシュ解除
+#- Wキーを素早く2回押す、またはCtrl+Wで開始
+#- Wキーを離すとダッシュ解除
 #
 #4) 設定画面（ホーム内）
 #- 設定項目を拡張
-# - graphics: water_update_interval, water_sim_margin_chunks,
-#   mountain_height_scale, tall_grass_spawn_threshold
-# - behavior: dash_speed_multiplier, dash_double_tap_window
+#- graphics: water_update_interval, water_sim_margin_chunks,
+#mountain_height_scale, tall_grass_spawn_threshold
+#- behavior: dash_speed_multiplier, dash_double_tap_window
 #- 項目増加に対応するため、設定画面のスクロール操作（↑↓ / マウスホイール）を追加
 
 #マルチプレイについて
