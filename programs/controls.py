@@ -6,24 +6,54 @@ from . import state as s
 from . import world
 
 
+def key_code_for_action(action):
+    name = s.KEY_BINDINGS.get(action, "")
+    try:
+        return pygame.key.key_code(name)
+    except Exception:
+        default = {
+            "forward": K_w,
+            "backward": K_s,
+            "left": K_a,
+            "right": K_d,
+            "jump": K_SPACE,
+            "crouch": K_LSHIFT,
+            "sprint": K_LCTRL,
+            "respawn": K_r,
+            "save": K_F5,
+            "reload": K_F9,
+            "pause": K_ESCAPE,
+        }.get(action)
+        return default
+
+
+def is_action_pressed(keys, action):
+    key_code = key_code_for_action(action)
+    return key_code is not None and keys[key_code]
+
+
+def event_matches_action(event, action):
+    return event.type == KEYDOWN and event.key == key_code_for_action(action)
+
+
 def handle_input():
     """ ユーザー入力を処理する """
     keys = pygame.key.get_pressed()
-    s.player.crouching = keys[K_LSHIFT] or keys[K_RSHIFT]
+    s.player.crouching = is_action_pressed(keys, "crouch")
     now = pygame.time.get_ticks() * 0.001
-    w_pressed = keys[K_w]
-    ctrl_pressed = keys[K_LCTRL] or keys[K_RCTRL]
+    forward_pressed = is_action_pressed(keys, "forward")
+    sprint_pressed = is_action_pressed(keys, "sprint")
 
-    # WダブルタップまたはCtrlでダッシュ開始。Wを離したら即停止。
-    if w_pressed and not s.player.prev_w_pressed:
+    # 前進キーのダブルタップまたはダッシュキーで開始。前進キーを離したら即停止。
+    if forward_pressed and not s.player.prev_w_pressed:
         if (now - s.player.last_w_tap_time) <= s.DASH_DOUBLE_TAP_WINDOW:
             s.player.sprinting = True
         s.player.last_w_tap_time = now
-    if ctrl_pressed and w_pressed:
+    if sprint_pressed and forward_pressed:
         s.player.sprinting = True
-    if not w_pressed:
+    if not forward_pressed or s.player.crouching:
         s.player.sprinting = False
-    s.player.prev_w_pressed = w_pressed
+    s.player.prev_w_pressed = forward_pressed
 
     # マウスの動き
     dx, dy = pygame.mouse.get_rel()
@@ -50,20 +80,20 @@ def handle_input():
         speed *= s.DASH_SPEED_MULTIPLIER
     if world.is_player_in_water():
         speed *= s.WATER_MOVE_MULTIPLIER
-    if keys[K_w]:  # 前進
+    if forward_pressed:  # 前進
         move_dx += fwd_x_comp * speed
         move_dz += fwd_z_comp * speed
-    if keys[K_s]:  # 後退
+    if is_action_pressed(keys, "backward"):  # 後退
         move_dx -= fwd_x_comp * speed
         move_dz -= fwd_z_comp * speed
-    if keys[K_a]:  # 左へ平行移動
+    if is_action_pressed(keys, "left"):  # 左へ平行移動
         move_dx -= right_x_comp * speed
         move_dz -= right_z_comp * speed
-    if keys[K_d]:  # 右へ平行移動
+    if is_action_pressed(keys, "right"):  # 右へ平行移動
         move_dx += right_x_comp * speed
         move_dz += right_z_comp * speed
 
-    if keys[K_SPACE]:
+    if is_action_pressed(keys, "jump"):
         if world.is_player_in_water():
             s.player.velocity_y = min(
                 s.WATER_SWIM_UP_VELOCITY,

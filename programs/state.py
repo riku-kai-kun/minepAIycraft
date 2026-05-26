@@ -5,7 +5,7 @@ SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 SKY_COLOR = (0.5, 0.8, 1.0, 1)
 CAPTION = "MinepAIycraft"
-APP_VERSION = "minepAIycraft_ver0.4"
+APP_VERSION = "minepAIycraft_ver0.5"
 MULTIPLAYER_PORT = 38573
 MULTIPLAYER_ROOM_ID_LEN = 6
 MULTIPLAYER_RELAY_HOST = "127.0.0.1"
@@ -77,6 +77,10 @@ CUBE_LIST_DIRT = None
 CUBE_LIST_GRASS_SIDES = None
 CUBE_LIST_GRASS_TOP = None
 CUBE_LIST_STONE = None
+CUBE_LIST_TALL_GRASS = None
+FACE_LISTS_DIRT = ()
+FACE_LISTS_GRASS_TOP = ()
+FACE_LISTS_STONE = ()
 TEX_GRASS_TOP = None
 TEX_DIRT = None
 TEX_STONE = None
@@ -88,6 +92,7 @@ REMOVED_STONE = set()
 PLACED_BLOCKS_BY_CHUNK = {}
 REMOVED_GROUND_BY_CHUNK = {}
 REMOVED_STONE_BY_CHUNK = {}
+TALL_GRASS_BLOCKS_BY_CHUNK = {}
 WATER_SOURCES = set()
 WATER_BLOCKS = {}
 WATER_BLOCKS_BY_CHUNK = {}
@@ -126,6 +131,20 @@ WATER_MOVE_MULTIPLIER = 0.55
 SHOW_CROSSHAIR = True
 SHOW_TARGET_OUTLINE = True
 AUTO_SAVE_ON_EXIT = True
+LANGUAGE = "ja"
+KEY_BINDINGS = {
+    "forward": "w",
+    "backward": "s",
+    "left": "a",
+    "right": "d",
+    "jump": "space",
+    "crouch": "left shift",
+    "sprint": "left ctrl",
+    "respawn": "r",
+    "save": "f5",
+    "reload": "f9",
+    "pause": "escape",
+}
 
 class Camera:
     def __init__(self):

@@ -11,22 +11,46 @@ def draw_grass_block():
     glCallList(s.CUBE_LIST_GRASS_TOP)
 
 
+def draw_grass_block_faces(face_indices):
+    for face_index in face_indices:
+        if face_index == 4:
+            glCallList(s.FACE_LISTS_GRASS_TOP[face_index])
+        else:
+            glCallList(s.FACE_LISTS_DIRT[face_index])
+
+
 def draw_dirt_block():
     glCallList(s.CUBE_LIST_DIRT)
+
+
+def draw_dirt_block_faces(face_indices):
+    for face_index in face_indices:
+        glCallList(s.FACE_LISTS_DIRT[face_index])
 
 
 def draw_stone_cube():
     glCallList(s.CUBE_LIST_STONE)
 
 
+def draw_stone_block_faces(face_indices):
+    for face_index in face_indices:
+        glCallList(s.FACE_LISTS_STONE[face_index])
+
+
 def draw_tall_grass():
+    glCallList(s.CUBE_LIST_TALL_GRASS)
+
+
+def build_tall_grass_list():
+    s.CUBE_LIST_TALL_GRASS = glGenLists(1)
+    glNewList(s.CUBE_LIST_TALL_GRASS, GL_COMPILE)
     glDisable(GL_TEXTURE_2D)
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glDepthMask(GL_FALSE)
     glColor4f(0.36, 0.76, 0.28, 0.88)
-    y0 = 0.50
-    y1 = 1.18
+    y0 = -0.50
+    y1 = 0.18
     w = 0.30
     glBegin(GL_QUADS)
     # Crossed quads (minecraft-like grass card)
@@ -42,6 +66,24 @@ def draw_tall_grass():
     glEnd()
     glDepthMask(GL_TRUE)
     glEnable(GL_TEXTURE_2D)
+    glEndList()
+
+
+def build_face_lists(texture_id):
+    face_lists = []
+    for surface in s.SURFACES:
+        display_list = glGenLists(1)
+        glNewList(display_list, GL_COMPILE)
+        glBindTexture(GL_TEXTURE_2D, texture_id)
+        glBegin(GL_QUADS)
+        for i, vertex_index in enumerate(surface):
+            u, v = s.TEX_COORDS[i]
+            glTexCoord2f(u, v)
+            glVertex3fv(s.VERTICES[vertex_index])
+        glEnd()
+        glEndList()
+        face_lists.append(display_list)
+    return tuple(face_lists)
 
 
 def draw_water_block(
@@ -136,7 +178,7 @@ def draw_water_block(
 
 
 def update_environment_effects():
-    underwater = world.is_player_in_water()
+    underwater = world.is_camera_underwater()
     if underwater:
         glClearColor(0.10, 0.28, 0.42, 1.0)
         glEnable(GL_FOG)
@@ -151,7 +193,7 @@ def update_environment_effects():
 
 
 def draw_underwater_overlay():
-    if not world.is_player_in_water():
+    if not world.is_camera_underwater():
         return
     glDisable(GL_TEXTURE_2D)
     glEnable(GL_BLEND)
@@ -241,6 +283,10 @@ def load_textures():
 
 
 def build_cube_list():
+    s.FACE_LISTS_DIRT = build_face_lists(s.TEX_DIRT)
+    s.FACE_LISTS_GRASS_TOP = build_face_lists(s.TEX_GRASS_TOP)
+    s.FACE_LISTS_STONE = build_face_lists(s.TEX_STONE)
+
     s.CUBE_LIST_DIRT = glGenLists(1)
     glNewList(s.CUBE_LIST_DIRT, GL_COMPILE)
     glBindTexture(GL_TEXTURE_2D, s.TEX_DIRT)
@@ -290,6 +336,8 @@ def build_cube_list():
             glVertex3fv(s.VERTICES[vertex_index])
     glEnd()
     glEndList()
+
+    build_tall_grass_list()
 
 
 def draw_chunks():

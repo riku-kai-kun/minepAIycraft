@@ -24,6 +24,7 @@ def init_world(generate_oceans=True):
     s.PLACED_BLOCKS_BY_CHUNK.clear()
     s.REMOVED_GROUND_BY_CHUNK.clear()
     s.REMOVED_STONE_BY_CHUNK.clear()
+    s.TALL_GRASS_BLOCKS_BY_CHUNK.clear()
     s.WATER_SOURCES.clear()
     s.WATER_BLOCKS.clear()
     s.WATER_BLOCKS_BY_CHUNK.clear()
@@ -86,17 +87,61 @@ def is_natural_terrain_at(x, y, z):
     return (x, y, z) not in s.REMOVED_GROUND
 
 
-def should_spawn_tall_grass(x, y, z):
-    if is_block_at(x, y + 1, z):
-        return False
-    if is_water_at(x, y + 1, z):
-        return False
+@lru_cache(maxsize=200000)
+def tall_grass_density_passes(x, z, threshold):
     # 低周波+高周波ノイズを混ぜて、列状パターンを避ける
     n1 = value_noise_3d(x + 137, 0, z - 241, 0.18, s.CAVE_SEED + 911)
     n2 = value_noise_3d(x - 59, 0, z + 83, 0.43, s.CAVE_SEED + 977)
     jitter = _hash_float(x, 0, z, s.CAVE_SEED + 1031) * 0.12
     density = n1 * 0.72 + n2 * 0.28 + jitter
-    return density > s.TALL_GRASS_SPAWN_THRESHOLD
+    return density > threshold
+
+
+def should_spawn_tall_grass_block(x, ground_y, z):
+    grass_pos = (x, ground_y + 1, z)
+    if grass_pos in s.PLACED_BLOCKS:
+        return False
+    if is_water_at(grass_pos[0], grass_pos[1], grass_pos[2]):
+        return False
+    return tall_grass_density_passes(x, z, s.TALL_GRASS_SPAWN_THRESHOLD)
+
+
+def get_ground_visible_faces(x, y, z, top, surface_heights, placed_blocks):
+    faces = []
+
+    def side_solid(nx, ny, nz):
+        if nx < s.WORLD_MIN_X or nx > s.WORLD_MAX_X or nz < s.WORLD_MIN_Z or nz > s.WORLD_MAX_Z:
+            return False
+        if (nx, ny, nz) in placed_blocks:
+            return True
+        neighbor_top = surface_heights.get((nx, nz))
+        if neighbor_top is None:
+            neighbor_top = get_surface_height(nx, nz)
+        return ny <= neighbor_top and (nx, ny, nz) not in s.REMOVED_GROUND
+
+    for face_index, nx, nz in (
+        (0, x, z - 1),
+        (1, x - 1, z),
+        (2, x, z + 1),
+        (3, x + 1, z),
+    ):
+        if not side_solid(nx, y, nz):
+            faces.append(face_index)
+
+    above = (x, y + 1, z)
+    if above not in placed_blocks:
+        if y == top or (y + 1 <= top and above in s.REMOVED_GROUND):
+            faces.append(4)
+
+    below = (x, y - 1, z)
+    if below not in placed_blocks:
+        if y - 1 >= -1:
+            if below in s.REMOVED_GROUND:
+                faces.append(5)
+        elif (x, y - 1, z) in s.REMOVED_STONE:
+            faces.append(5)
+
+    return tuple(faces)
 
 
 @lru_cache(maxsize=500000)
@@ -576,32 +621,41 @@ def build_chunk_list(chunk):
     placed_blocks = s.PLACED_BLOCKS
     removed_ground_by_chunk = s.REMOVED_GROUND_BY_CHUNK
     removed_stone_by_chunk = s.REMOVED_STONE_BY_CHUNK
+    surface_heights = {
+        (x, z): get_surface_height(x, z)
+        for x in range(max(s.WORLD_MIN_X, min_x - 1), min(s.WORLD_MAX_X, max_x + 1) + 1)
+        for z in range(max(s.WORLD_MIN_Z, min_z - 1), min(s.WORLD_MAX_Z, max_z + 1) + 1)
+    }
+    tall_grass_blocks = []
     for x in range(min_x, max_x + 1):
         for z in range(min_z, max_z + 1):
-            top = get_surface_height(x, z)
+            top = surface_heights[(x, z)]
+            if (x, top, z) not in s.REMOVED_GROUND and should_spawn_tall_grass_block(x, top, z):
+                tall_grass_blocks.append((x, top + 1, z))
             for y in range(-1, top + 1):
                 if (x, y, z) in s.REMOVED_GROUND:
                     continue
                 if (x, y, z) in placed_blocks:
                     continue
-                exposed = False
-                for dx, dy, dz in NEIGHBOR_OFFSETS:
-                    if not is_block_at(x + dx, y + dy, z + dz):
-                        exposed = True
-                        break
-                if not exposed:
+                visible_faces = get_ground_visible_faces(x, y, z, top, surface_heights, placed_blocks)
+                if not visible_faces:
                     continue
                 glPushMatrix()
                 glTranslatef(x, y, z)
                 if y == top:
-                    rendering.draw_grass_block()
-                    if should_spawn_tall_grass(x, y, z):
-                        rendering.draw_tall_grass()
+                    rendering.draw_grass_block_faces(visible_faces)
                 elif y >= top - 3:
-                    rendering.draw_dirt_block()
+                    rendering.draw_dirt_block_faces(visible_faces)
                 else:
-                    rendering.draw_stone_cube()
+                    rendering.draw_stone_block_faces(visible_faces)
                 glPopMatrix()
+    s.TALL_GRASS_BLOCKS_BY_CHUNK[(cx, cz)] = tuple(tall_grass_blocks)
+
+    for (x, y, z) in s.TALL_GRASS_BLOCKS_BY_CHUNK.get((cx, cz), ()):
+        glPushMatrix()
+        glTranslatef(x, y, z)
+        rendering.draw_tall_grass()
+        glPopMatrix()
 
     for (x, y, z) in s.PLACED_BLOCKS_BY_CHUNK.get((cx, cz), ()):
         glPushMatrix()
@@ -729,6 +783,7 @@ def update_visible_chunks(force=False):
         for key in list(s.ACTIVE_CHUNKS.keys()):
             if key not in desired:
                 chunk = s.ACTIVE_CHUNKS.pop(key)
+                s.TALL_GRASS_BLOCKS_BY_CHUNK.pop(key, None)
                 if chunk.display_list:
                     glDeleteLists(chunk.display_list, 1)
         for key in desired:
@@ -988,3 +1043,13 @@ def is_player_in_water():
     bx1, by1, bz1 = point_to_block(px, py + 0.2, pz)
     bx2, by2, bz2 = point_to_block(px, top_y, pz)
     return is_water_at(bx1, by1, bz1) or is_water_at(bx2, by2, bz2)
+
+
+def is_camera_underwater():
+    px, py, pz = s.player.position
+    eye_y = py + get_eye_height()
+    bx, by, bz = point_to_block(px, eye_y, pz)
+    if not is_water_at(bx, by, bz):
+        return False
+    water_surface_y = by + 0.48
+    return eye_y < water_surface_y - 0.03

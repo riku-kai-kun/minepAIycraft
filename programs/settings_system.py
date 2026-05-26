@@ -7,6 +7,7 @@ SETTINGS_FILE_NAME = "settings.json"
 
 DEFAULT_SETTINGS = {
     "main": {
+        "language": "ja",
         "auto_save_on_exit": True,
         "show_crosshair": True,
         "show_target_outline": True,
@@ -27,10 +28,24 @@ DEFAULT_SETTINGS = {
         "dash_speed_multiplier": 1.8,
         "dash_double_tap_window": 0.28,
     },
+    "controls": {
+        "forward": "w",
+        "backward": "s",
+        "left": "a",
+        "right": "d",
+        "jump": "space",
+        "crouch": "left shift",
+        "sprint": "left ctrl",
+        "respawn": "r",
+        "save": "f5",
+        "reload": "f9",
+        "pause": "escape",
+    },
 }
 
 ALLOWED_OPTIONS = {
     "main": {
+        "language": ["ja", "en"],
         "auto_save_on_exit": [True, False],
         "show_crosshair": [True, False],
         "show_target_outline": [True, False],
@@ -65,9 +80,14 @@ def _merge_with_defaults(data):
         user_section = data.get(section, {}) if isinstance(data, dict) else {}
         for key, default_value in defaults.items():
             value = user_section.get(key, default_value)
-            allowed = ALLOWED_OPTIONS[section][key]
-            if value not in allowed:
-                value = default_value
+            if section == "controls":
+                value = str(value).strip().lower()
+                if not value:
+                    value = default_value
+            else:
+                allowed = ALLOWED_OPTIONS[section][key]
+                if value not in allowed:
+                    value = default_value
             merged[section][key] = value
     return merged
 
@@ -98,8 +118,10 @@ def apply_settings_to_state(settings):
     main = normalized["main"]
     graphics = normalized["graphics"]
     behavior = normalized["behavior"]
+    controls = normalized["controls"]
 
     s.AUTO_SAVE_ON_EXIT = main["auto_save_on_exit"]
+    s.LANGUAGE = main["language"]
     s.SHOW_CROSSHAIR = main["show_crosshair"]
     s.SHOW_TARGET_OUTLINE = main["show_target_outline"]
 
@@ -116,3 +138,4 @@ def apply_settings_to_state(settings):
     s.CROUCH_SPEED = behavior["crouch_speed"]
     s.DASH_SPEED_MULTIPLIER = behavior["dash_speed_multiplier"]
     s.DASH_DOUBLE_TAP_WINDOW = behavior["dash_double_tap_window"]
+    s.KEY_BINDINGS = dict(controls)

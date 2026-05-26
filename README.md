@@ -1,5 +1,5 @@
 #minepAIycraft
-#ver0.4
+#ver0.5
 
 #minepAIycraftとは、minecraftをpythonで再現しようという試みの一環です
 #作成はAIと共同で行います
@@ -11,7 +11,8 @@
 #1.フォルダ「minepAIycraft_macos」を解凍し、中身の、「minepAIycraft」フォルダを、Finderの左側にある自分のユーザーのフォルダに移動させる（🏠マークがあるところ）
 #2.アプリケーションの「ターミナル」を開く
 #3.「cd minepAIycraft」と入力しEnterキーを押す
-#4.「./READMEの実行方法読め.dylib」と入力しEnterキーを押す
+#4.「chmod +x READMEの実行方法読め.dylib」と入力しEnterキーを押す
+#5.「./READMEの実行方法読め.dylib」と入力しEnterキーを押す
 
 #imagesディレクトリ
 #テクスチャ、アイテム、UI用にそれぞれディレクトリがあります
@@ -21,6 +22,9 @@
 
 #programsディレクトリ
 #index.py以外のプログラムはここに入れます
+
+#fontsディレクトリ 
+#ゲーム内で使うフォントはここに入れます
 
 #コードについて
 #実行入口はindex.pyです。pygameでウィンドウと入力を管理し、PyOpenGLで3D描画します。
@@ -39,28 +43,47 @@
 #- ノイズベースの山地形を追加（地表高さが場所ごとに変化）
 #- 海盆地を生成し、水源から水を流して埋める形で海を生成
 #- 草ブロック上にランダム雑草（装飾）を自動生成
-
+#
 #2) 水システム
 #- 水源から周囲へ流れる水流シミュレーションを実装
 #- 水源破壊・流路変更時に、段階的に流れが変化する更新方式を採用
 #- 水中時の挙動（重力/浮上/移動速度）を追加
 #- 水中フォグとオーバーレイ、水テクスチャ描画に対応
 #- 水テクスチャ: images/textures/water.png
-
+#
 #3) 操作
 #- ダッシュを追加
-#- Wキーを素早く2回押す、またはCtrl+Wで開始
-#- Wキーを離すとダッシュ解除
-
+#  - Wキーを素早く2回押す、またはCtrl+Wで開始
+#  - Wキーを離すとダッシュ解除
+#
 #4) 設定画面（ホーム内）
 #- 設定項目を拡張
-#- graphics: water_update_interval, water_sim_margin_chunks,
-#mountain_height_scale, tall_grass_spawn_threshold
-#- behavior: dash_speed_multiplier, dash_double_tap_window
+#  - graphics: water_update_interval, water_sim_margin_chunks,
+#    mountain_height_scale, tall_grass_spawn_threshold
+#  - behavior: dash_speed_multiplier, dash_double_tap_window
 #- 項目増加に対応するため、設定画面のスクロール操作（↑↓ / マウスホイール）を追加
 
+#ver0.5の実装内容
+#1) ランチャー
+#- ランチャーバージョンを launcher-R-ver26.01.0 に更新
+#- ゲーム起動/サーバーフォルダを開く時に必要なファイルを自動DLする方式に整理
+#- ゲーム本体とサーバーキットの保存先フォルダをランチャーから変更可能にした
+#- ZIP展開時の日本語ファイル名文字化けと、__MACOSX/._ファイル混入による起動失敗を修正
+#- ランチャーの日本語/英語切替を追加
+#
+#2) ゲームUI/設定
+#- ゲーム内バージョンを minepAIycraft_ver0.5 に更新
+#- ESCでポーズメニューを開き、保存・設定変更・ホーム復帰・終了を選べるようにした
+#- 設定画面からキー割り当てを変更可能にした
+#- ゲーム内の日本語/英語切替を追加
+#- 日本語表示用フォント選択を改善し、文字化け/豆腐表示を修正
+#
+#3) 軽量化
+#- 草を非衝突ブロックとしてチャンク単位で扱うようにした
+#- 地表ブロックの見えている面だけを描画し、チャンク構築と描画負荷を軽減
+
 #マルチプレイについて
-#ver0.4では、ホーム画面のMULTIPLAYERからオンライン参加できます。
+#ver0.5では、ホーム画面のMULTIPLAYERからオンライン参加できます。
 #参加方法は「Room Code（6文字）」または「Invite ID（MPC-...）」です。
 #接続時にバージョンチェックを行い、不一致の場合は参加できません。
 #他プレイヤーは固定スキン（簡易モデル）で表示されます。

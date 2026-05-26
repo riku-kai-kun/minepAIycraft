@@ -7,8 +7,8 @@ from pygame.locals import *
 from OpenGL.GL import *
 
 from programs import state as s
-from programs.controls import handle_input
-from programs.ui import run_start_menu
+from programs.controls import handle_input, event_matches_action
+from programs.ui import run_start_menu, run_pause_menu
 from programs.save_system import (
     ensure_saves_dir,
     list_save_slots,
@@ -103,6 +103,25 @@ def main():
     current_save_slot = selected_slot
     mp_session = MultiplayerSession()
 
+    def enter_game_display():
+        pygame.display.set_mode((s.SCREEN_WIDTH, s.SCREEN_HEIGHT), DOUBLEBUF | OPENGL)
+        pygame.display.set_caption(s.CAPTION)
+        pygame.mouse.set_visible(False)
+        pygame.event.set_grab(True)
+        pygame.event.clear()
+        pygame.mouse.get_rel()
+        init_gl()
+        for chunk in s.ACTIVE_CHUNKS.values():
+            chunk.display_list = None
+            chunk.dirty = True
+        s.LAST_PLAYER_CHUNK = None
+        s.CHUNKS_NEED_UPDATE = True
+
+    def enter_menu_display():
+        pygame.mouse.set_visible(True)
+        pygame.event.set_grab(False)
+        pygame.event.clear()
+
     def reset_local_player():
         s.player.position = [0.0, 0.0, 0.0]
         s.player.velocity_y = 0.0
@@ -177,7 +196,7 @@ def main():
         log_event(f"Save slot selected: {current_save_slot}")
     clock = pygame.time.Clock()
 
-    def shutdown_and_exit():
+    def finish_session():
         if s.AUTO_SAVE_ON_EXIT and current_save_slot and mp_session.mode != "client":
             try:
                 save_to_slot(base_dir, current_save_slot)
@@ -193,8 +212,61 @@ def main():
             f" | pos=({s.player.position[0]:.2f},{s.player.position[1]:.2f},{s.player.position[2]:.2f})"
         )
         mp_session.shutdown()
+
+    def shutdown_and_exit():
+        finish_session()
         pygame.quit()
         sys.exit()
+
+    def restart_to_home():
+        finish_session()
+        pygame.quit()
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as exc:
+            print(f"Failed to return home: {exc}")
+            sys.exit(1)
+
+    def save_current_game():
+        if current_save_slot and mp_session.mode != "client":
+            save_to_slot(base_dir, current_save_slot)
+            log_event(f"Saved: {current_save_slot}")
+            return f"Saved: {current_save_slot}"
+        log_event("Save disabled in joined multiplayer")
+        return "Save disabled in joined multiplayer"
+
+    def open_pause_menu():
+        nonlocal settings
+        enter_menu_display()
+        status_text = ""
+        while True:
+            result = run_pause_menu(
+                s.SCREEN_WIDTH,
+                s.SCREEN_HEIGHT,
+                s.CAPTION,
+                settings,
+                bool(current_save_slot and mp_session.mode != "client"),
+                status_text,
+            )
+            if result is None:
+                result = {"action": "resume", "settings": settings}
+            settings = result.get("settings", settings)
+            save_settings(base_dir, settings)
+            apply_settings_to_state(settings)
+            action_name = result.get("action")
+            if action_name == "save":
+                try:
+                    status_text = save_current_game()
+                except Exception as exc:
+                    status_text = f"Save failed: {exc}"
+                    log_event(status_text)
+                continue
+            if action_name == "home":
+                restart_to_home()
+            if action_name == "quit":
+                shutdown_and_exit()
+            enter_game_display()
+            return
 
     while True:
         for net_event in mp_session.poll_events():
@@ -215,23 +287,22 @@ def main():
                         mark_chunk_dirty_at(pos[0], pos[2])
 
         for event in pygame.event.get():
-            if event.type == pygame.QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
+            if event.type == pygame.QUIT:
                 shutdown_and_exit()
-            if event.type == KEYDOWN and event.key == K_r:
+            if event_matches_action(event, "pause"):
+                open_pause_menu()
+                continue
+            if event_matches_action(event, "respawn"):
                 s.player.position = [0.0, 0.0, 0.0]
                 s.player.velocity_y = 0.0
                 s.player.on_ground = False
                 log_event("Respawn")
-            if event.type == KEYDOWN and event.key == K_F5:
-                if current_save_slot and mp_session.mode != "client":
-                    try:
-                        save_to_slot(base_dir, current_save_slot)
-                        log_event(f"Saved: {current_save_slot}")
-                    except Exception as exc:
-                        log_event(f"Save failed: {exc}")
-                else:
-                    log_event("Save disabled in joined multiplayer")
-            if event.type == KEYDOWN and event.key == K_F9:
+            if event_matches_action(event, "save"):
+                try:
+                    save_current_game()
+                except Exception as exc:
+                    log_event(f"Save failed: {exc}")
+            if event_matches_action(event, "reload"):
                 if current_save_slot and not mp_session.is_multiplayer():
                     try:
                         load_from_slot(base_dir, current_save_slot)
